@@ -3,6 +3,7 @@ import threading, queue
 import logging
 import requests
 import json
+import
 
 class Spotify:
     def __init__():
@@ -96,7 +97,7 @@ class Pipeline:
 
 def processInput(input):
     
-    if 'Sophia' in input:
+    if 'Sophia' in input or 'Sofia' in input:
         if 'play' in input: # Think and not saying an noun
             Spotify.play()
         if 'pause' in input:
@@ -158,7 +159,7 @@ if __name__ == "__main__":
     headers = {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer BQBSQtlaLoSBn8WnYF7GSTGYt3BXe6VQPpFHN9TngEx80IMWYlbECX0vGzIdVU11I4XyX80gRhXOTbwjfXou4AdU_IIcGLaZrwPa3b8rCIxKxk3JUIBmlKcCsxVB2-SdMGhTFEOvui6IzQX4A2FRmnSoyIkw56ojfXmgC9lzAZ3nDnNVIVmec0FLsp3QqaZx1Tuor46ef84hak9bBiuaoCX4FjUzVoPqDtdezuSQpGE1mY-wBQqZrH9S2f2k41MkmH5g8Rdhg15aRtUZ4g',
+        'Authorization': 'Bearer BQBdfpMv9P9YZ-PwvfVXz_TqeKQyxVlke168RMYu6KMT7iKzccilvMmgFddINmPVSu-Yau9AUn5v4nFYsWPpBpMIgOBprA9C-QvzRoZNmyLOTC3eAjHHw-x7w3XsOtjqOVBLiznTRGE7NC0eJBP_biTOkt7figGT89pe7B1xvMkPF7xzBXbeRdzNQospJfUjSpiJusoj9SIDhA7kaH6XCz5bnXmFfWVEx8uyYO8aw3EcP1T_8Zd_Bi2HsSUQv0UjWUuV5QBIka-m7vqyDg',
     }
     # Create a custom logger
     logger = logging.getLogger(__name__)
@@ -186,7 +187,7 @@ if __name__ == "__main__":
     with sr.Microphone() as source:
         try:
             while True:  # repeatedly listen for phrases and put the resulting audio on the audio processing job queue
-                q.put(r.record(source, duration=5))
+                q.put(r.record(source, duration=10))
         except KeyboardInterrupt:  # allow Ctrl + C to shut down the program
             pass
         logger.error("This shit is over")
