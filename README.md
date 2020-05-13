@@ -1,5 +1,5 @@
 # Sophia
-## Introdcution
+## Introduction
 Sophia is a dictation tool used for all those note takers out there who's brains seem to always be one step ahead of their pen or pencil. Currently Sophia will dictate whatever you say, and will play and pause music on spotify if you give her access to your account. 
 ## Future Developemnt 
 Sophia is a work in progress designed to be a platform to create a virtual assistant that can undertsand natural language and allow for easy expandability for anyone who would like to customize their own personal assistant.
