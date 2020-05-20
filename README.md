@@ -12,3 +12,16 @@ pip install -r requirements.txt
 cd sophia
 python sophia.py
 ```
+
+## Sophia_V0.2
+Got rid of the Google API Dependancy and transfered over to a more complex model. The current Sophia_io.py file uses the DeepSpeech Mozilla Implementation. The speech accuracy is noticiably worse on this model, but does not require constant requests to the Google API. I would like to train my own model with common words within my vocabulary, as the open speech data used is great, but using thousands of hours of NPR doesn't train vulgaur language effectively at all.
+## How to run New Version
+You will need to download the traing models for this to run or you can provide your own models.
+```
+git clone https://github.com/scottjoyner/Sophia.git
+cd Sophia
+pip install -r requirements.txt
+wget https://github.com/mozilla/DeepSpeech/releases/download/v0.7.0/deepspeech-0.7.0-models.pbmm
+wget https://github.com/mozilla/DeepSpeech/releases/download/v0.7.0/deepspeech-0.7.0-models.scorer
+python Sophia_io.py -m deepspeech-0.7.0-models.pbmm -s deepspeech-0.7.0-models.scorer
+```

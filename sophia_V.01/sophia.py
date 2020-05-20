@@ -3,7 +3,6 @@ import threading, queue
 import logging
 import requests
 import json
-import
 
 class Spotify:
     def __init__():
@@ -50,7 +49,7 @@ class Spotify:
             data = '{device_ids": ["cd2a261ee7791075d5a7466c5a41eee03aa43f0b"]}'
         elif "google" in id or "speaker" in id:
             data = '{"device_ids":["f8811fc74c9e6891629cf8a7e8b4c5c2"]}'
-    
+
 
         response = requests.put('https://api.spotify.com/v1/me/player', headers=headers, data=data)
 
@@ -96,7 +95,7 @@ class Pipeline:
         logging.debug("%s:getlock released", name)
 
 def processInput(input):
-    
+
     if 'Sophia' in input or 'Sofia' in input:
         if 'play' in input: # Think and not saying an noun
             Spotify.play()
@@ -129,7 +128,7 @@ def processInput(input):
             res = client.query(' '.join(query))
             answer = next(res.results).text
             assistant_speaks("The answer is " + answer)
-            
+
 
 
 # Worker thread which processes the audio using Google API
