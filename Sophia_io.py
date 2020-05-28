@@ -8,14 +8,15 @@ import wave
 import webrtcvad
 from halo import Halo
 from scipy import signal
+import pyautogui
 
 logging.basicConfig(level=20)
 
 # Construct The resulting inference in this method or bring out into another python file
-class processInput(text):
-    def __init__(self, text):
-        print(text)
-    
+#class processInput(text):
+#    def __init__(self, text):
+#        print(text)
+
 class Audio(object):
     """Streams raw audio from microphone. Data is received in a separate thread, and stored in a buffer, to be read from."""
 
@@ -197,8 +198,9 @@ def main(ARGS):
                 vad_audio.write_wav(os.path.join(ARGS.savewav, datetime.now().strftime("savewav_%Y-%m-%d_%H-%M-%S_%f.wav")), wav_data)
                 wav_data = bytearray()
             text = stream_context.finishStream()
-            processInput(text)
+            #processInput(text)
             print(text)
+            pyautogui.write(text)
             stream_context = model.createStream()
 
 if __name__ == '__main__':
