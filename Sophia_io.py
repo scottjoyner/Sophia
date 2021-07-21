@@ -176,6 +176,7 @@ def main(ARGS):
                          device=ARGS.device,
                          input_rate=ARGS.rate,
                          file=ARGS.file)
+    print(vad_audio.device)
     print("Listening (ctrl-C to exit)...")
     frames = vad_audio.vad_collector()
 
@@ -200,7 +201,7 @@ def main(ARGS):
             text = stream_context.finishStream()
             #processInput(text)
             print(text)
-            pyautogui.write(text)
+            # pyautogui.write(text)
             stream_context = model.createStream()
 
 if __name__ == '__main__':
