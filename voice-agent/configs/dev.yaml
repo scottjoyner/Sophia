@@ -1,0 +1,16 @@
+server:
+  host: 0.0.0.0
+  port: 8765
+paths:
+  artifacts_dir: runs
+  workspace_dir: workspace
+llm:
+  provider: mock
+stt:
+  refine_enabled: true
+vad:
+  aggressiveness: 2
+  energy_threshold: 0.005
+auth:
+  threshold: 0.1
+  require_challenge: false

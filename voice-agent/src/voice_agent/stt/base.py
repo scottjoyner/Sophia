@@ -1,0 +1,9 @@
+from __future__ import annotations
+
+from typing import Protocol
+
+
+class StreamTranscriber(Protocol):
+    def process(self, samples, t_client_ms: int) -> str: ...
+    def finalize(self, samples) -> str: ...
+    def reset(self) -> None: ...

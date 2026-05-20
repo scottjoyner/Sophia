@@ -1,0 +1,10 @@
+paths:
+  artifacts_dir: runs
+  workspace_dir: workspace
+llm:
+  provider: mock
+stt:
+  refine_enabled: true
+auth:
+  threshold: 0.1
+  require_challenge: false
