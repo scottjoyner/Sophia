@@ -45,7 +45,7 @@ class RalphLoop:
         workspace_state = ""
         for idx in range(self.config.llm.max_steps):
             prompt = (
-                f"You are a planner. Transcript: {transcript}. "
+                f"{self.config.llm.system_prompt} You are a planner. Transcript: {transcript}. "
                 f"Workspace: {workspace_state}. Provide next action and say DONE if finished."
             )
             plan = self.agents.get("planner").handler(prompt)

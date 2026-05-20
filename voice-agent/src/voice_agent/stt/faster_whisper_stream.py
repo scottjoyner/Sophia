@@ -24,7 +24,11 @@ class StreamingTranscriber:
             return
         from faster_whisper import WhisperModel
 
-        self.model = WhisperModel("base", compute_type="int8")
+        self.model = WhisperModel(
+            self.config.model_size,
+            compute_type=self.config.compute_type,
+            cpu_threads=self.config.cpu_threads,
+        )
 
     def _decode(self, samples: np.ndarray) -> str:
         if self.model is None:

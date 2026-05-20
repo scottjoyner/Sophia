@@ -8,12 +8,14 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from ..config import AppConfig, load_config
 from ..util.audio import b64decode
+from .protocols import build_protocol_adapter
 from .session_manager import SessionManager
 
 
 def create_app(config: AppConfig) -> FastAPI:
     app = FastAPI()
     manager = SessionManager(config, Path(config.paths.artifacts_dir))
+    protocol = build_protocol_adapter(config.server.protocol)
 
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket) -> None:
@@ -22,8 +24,9 @@ def create_app(config: AppConfig) -> FastAPI:
             while True:
                 message = await websocket.receive_text()
                 data: Dict[str, Any] = json.loads(message)
-                msg_type = data.get("type")
-                payload = data.get("payload", {})
+                normalized = protocol.decode(data)
+                msg_type = normalized.msg_type
+                payload = normalized.payload
                 if msg_type == "start_session":
                     manager.start_session(
                         payload["session_id"],

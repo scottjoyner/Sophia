@@ -20,6 +20,9 @@ class STTConfig(BaseModel):
     window_ms: int = 5000
     overlap_ms: int = 1000
     refine_enabled: bool = True
+    model_size: str = "tiny"
+    compute_type: str = "int8"
+    cpu_threads: int = 2
 
 
 class VADConfig(BaseModel):
@@ -35,6 +38,9 @@ class LLMConfig(BaseModel):
     api_key: Optional[str] = None
     model: str = "local-model"
     max_steps: int = 4
+    system_prompt: str = (
+        "You are Sophia voice overlay for Hermes. Keep responses concise, actionable, and safe."
+    )
 
 
 class TTSConfig(BaseModel):
@@ -50,6 +56,12 @@ class PathsConfig(BaseModel):
 class ServerConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8765
+    protocol: str = "native_ws"
+
+
+class RuntimeConfig(BaseModel):
+    max_memory_gb: float = 8.0
+    allow_hf_downloads: bool = False
 
 
 class AppConfig(BaseModel):
@@ -60,6 +72,7 @@ class AppConfig(BaseModel):
     tts: TTSConfig = Field(default_factory=TTSConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
+    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
 
 
 def load_config(path: Optional[str]) -> AppConfig:
