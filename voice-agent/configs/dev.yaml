@@ -1,13 +1,21 @@
 server:
   host: 0.0.0.0
   port: 8765
+  protocol: hermes_overlay_v1
 paths:
   artifacts_dir: runs
   workspace_dir: workspace
+runtime:
+  max_memory_gb: 8
+  allow_hf_downloads: false
 llm:
   provider: mock
+  system_prompt: "You are Sophia voice overlay for Hermes. Keep outputs short and task-focused."
 stt:
   refine_enabled: true
+  model_size: tiny
+  compute_type: int8
+  cpu_threads: 2
 vad:
   aggressiveness: 2
   energy_threshold: 0.005
