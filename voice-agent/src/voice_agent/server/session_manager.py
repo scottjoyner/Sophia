@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 
@@ -28,15 +28,23 @@ class SessionState:
     last_partial_text: str = ""
 
 
+EventCallback = Callable[[str, Dict[str, object]], None]
+
+
 class SessionManager:
-    def __init__(self, config: AppConfig, base_dir: Path):
+    def __init__(self, config: AppConfig, base_dir: Path, event_callback: Optional[EventCallback] = None):
         self.config = config
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.sessions: Dict[str, SessionState] = {}
         self.logger = JsonlLogger(self.base_dir / "events.jsonl")
         self.db = Database(self.base_dir / "results.sqlite")
-        self.pipeline = PipelineManager(config, self.base_dir)
+        self._event_callback = event_callback
+        self.pipeline = PipelineManager(config, self.base_dir, event_callback=event_callback)
+
+    def _emit(self, event_type: str, payload: Dict[str, object]) -> None:
+        if self._event_callback:
+            self._event_callback(event_type, payload)
 
     def start_session(self, session_id: str, sample_rate: int, channels: int, encoding: str, user_id: str) -> None:
         vad = create_vad(
@@ -58,6 +66,7 @@ class SessionManager:
         payload = {"session_id": session_id, "ts_ms": now_ms()}
         self.logger.log("session_start", payload)
         self.db.log_event(session_id, "session_start", payload)
+        self._emit("session_start", payload)
 
     def handle_audio_chunk(self, session_id: str, pcm_bytes: bytes, chunk_ms: int, t_client_ms: int) -> None:
         state = self.sessions[session_id]
@@ -76,6 +85,7 @@ class SessionManager:
         payload = {"session_id": session_id, "ts_ms": now_ms()}
         self.logger.log("session_end", payload)
         self.db.log_event(session_id, "session_end", payload)
+        self._emit("session_end", payload)
         self.pipeline.finish_session(state)
         self.sessions.pop(session_id, None)
 

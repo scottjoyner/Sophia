@@ -1,0 +1,10 @@
+https://x1-370.tailcb8954.ts.net:8443 {
+    tls /certs/sophia.crt /certs/sophia.key
+    encode gzip
+
+    request_body {
+        max_size 512MB
+    }
+
+    reverse_proxy host.docker.internal:8765
+}

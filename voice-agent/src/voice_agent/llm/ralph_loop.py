@@ -26,7 +26,7 @@ class RalphLoop:
         self.agents = self._build_agents()
 
     def _build_provider(self) -> LLMProvider:
-        if self.config.llm.provider == "openai" and self.config.llm.base_url:
+        if self.config.llm.provider in {"openai", "hermes"} and self.config.llm.base_url:
             return OpenAICompatProvider(self.config.llm.base_url, self.config.llm.api_key, self.config.llm.model)
         return MockProvider()
 
@@ -41,6 +41,9 @@ class RalphLoop:
         return self.provider.complete(prompt).content
 
     def run(self, transcript: str) -> str:
+        if transcript.startswith("Voice input was captured by Sophia for Hermes."):
+            prompt = f"{self.config.llm.system_prompt}\n\n{transcript}"
+            return self.provider.complete(prompt).content
         steps: List[RalphStep] = []
         workspace_state = ""
         for idx in range(self.config.llm.max_steps):

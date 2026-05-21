@@ -1,0 +1,39 @@
+neo4j:
+  uri: bolt://host.docker.internal:7687
+  user: neo4j
+  source_database: neo4j
+  target_database: memory
+
+voice_insight:
+  namespace: sophia_voice_insight_v1
+  default_identity: scott
+  accepted_threshold: 0.75
+  candidate_threshold: 0.62
+  models:
+    speaker_embedding: speechbrain/spkrec-ecapa-voxceleb
+    diarization: pyannote/speaker-diarization-3.1
+  storage:
+    staged_audio_root: /ssd-ingest/audio
+    host_staged_audio_root: /mnt/S/sophia-ingest/audio
+    training_root: /ssd-ingest/voice-insight/training
+    host_training_root: /mnt/S/sophia-ingest/voice-insight/training
+    path_rewrites:
+      - from: /mnt/8TB_2025/fileserver
+        to: /nas-fileserver
+      - from: /media/scott/NAS1/fileserver
+        to: /nas-fileserver
+      - from: /mnt/S/sophia-ingest
+        to: /ssd-ingest
+  training:
+    min_segment_seconds: 2.0
+    max_segment_seconds: 18.0
+    min_text_chars: 16
+    max_samples_per_run: 100
+  legacy:
+    speaker_seeds:
+      # Add high-confidence legacy clusters here after reviewing the report.
+      - identity: scott
+        key: "2000_1127_220512"
+        label: "SPEAKER_00"
+        confidence: 0.90
+        note: "Initial self-talk seed; verify exported clips before broad promotion."

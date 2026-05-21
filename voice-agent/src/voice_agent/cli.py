@@ -17,6 +17,7 @@ from .bench.report import generate_report
 from .bench.runner import run_bench
 from .config import AppConfig, load_config
 from .server.app import create_app
+from .server.protocols import encode_message
 from .util.audio import read_wav, write_wav
 
 
@@ -62,7 +63,9 @@ def cmd_verify(args: argparse.Namespace) -> None:
 
 
 def cmd_replay(args: argparse.Namespace) -> None:
-    asyncio.run(replay_wav(args.url, args.wav, args.user, session_id=args.session_id))
+    asyncio.run(
+        replay_wav(args.url, args.wav, args.user, session_id=args.session_id, protocol=args.protocol)
+    )
 
 
 def cmd_mic(args: argparse.Namespace) -> None:
@@ -82,16 +85,17 @@ def cmd_mic(args: argparse.Namespace) -> None:
         async with websockets.connect(args.url) as ws:
             await ws.send(
                 json.dumps(
-                    {
-                        "type": "start_session",
-                        "payload": {
+                    encode_message(
+                        args.protocol,
+                        "start_session",
+                        {
                             "session_id": args.session_id,
                             "sample_rate": sample_rate,
                             "channels": 1,
                             "encoding": "pcm_s16le",
                             "user_id": args.user,
                         },
-                    }
+                    )
                 )
             )
             await ws.recv()
@@ -101,20 +105,21 @@ def cmd_mic(args: argparse.Namespace) -> None:
                 pcm = float_to_pcm16_bytes(audio.flatten())
                 await ws.send(
                     json.dumps(
-                        {
-                            "type": "audio_chunk",
-                            "payload": {
+                        encode_message(
+                            args.protocol,
+                            "audio_chunk",
+                            {
                                 "session_id": args.session_id,
                                 "seq": 0,
                                 "chunk_ms": chunk_ms,
                                 "pcm_bytes": b64encode(pcm),
                                 "t_client_ms": now_ms(),
                             },
-                        }
+                        )
                     )
                 )
                 await ws.recv()
-            await ws.send(json.dumps({"type": "end_session", "payload": {"session_id": args.session_id}}))
+            await ws.send(json.dumps(encode_message(args.protocol, "end_session", {"session_id": args.session_id})))
             await ws.recv()
 
     asyncio.run(stream())
@@ -138,22 +143,21 @@ def cmd_ingest_dir(args: argparse.Namespace) -> None:
 
 
 def cmd_ingest_auto_ingest(args: argparse.Namespace) -> None:
-    if importlib.util.find_spec("neo4j") is None:
-        print("neo4j driver not installed", file=sys.stderr)
-        sys.exit(1)
-    from neo4j import GraphDatabase
+    from .auth.neo4j_ingest import collect_audio_paths_from_neo4j
     config = _load_config(args.config)
-    driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.neo4j_pass))
-    files: List[str] = []
-    with driver.session() as session:
-        if args.speaker_node_id:
-            query = "MATCH (s:Speaker) WHERE id(s)=$id MATCH (s)-[:SPOKE_IN]->(a:Audio) RETURN a.path as path"
-            result = session.run(query, id=int(args.speaker_node_id))
-        else:
-            query = "MATCH (a:Audio) RETURN a.path as path"
-            result = session.run(query)
-        for record in result:
-            files.append(record["path"])
+    try:
+        files = collect_audio_paths_from_neo4j(
+            args.neo4j_uri,
+            args.neo4j_user,
+            args.neo4j_pass,
+            speaker_node_id=args.speaker_node_id,
+            speaker_name=args.speaker_name,
+            limit=args.limit,
+            database=args.neo4j_database,
+        )
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
     enroll_from_files(config, args.user, files)
     print(f"Ingested {len(files)} files from Neo4j for {args.user}")
 
@@ -191,6 +195,8 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--wav", required=True)
     replay.add_argument("--user", default="default")
     replay.add_argument("--session-id", default="session")
+    replay.add_argument("--protocol", choices=["native_ws", "hermes_overlay_v1"], default="native_ws")
+    replay.add_argument("--ref", help="Reference transcript for compatibility with older docs", default=None)
     replay.set_defaults(func=cmd_replay)
 
     bench = sub.add_parser("bench")
@@ -213,8 +219,11 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_auto.add_argument("--neo4j-uri", required=True)
     ingest_auto.add_argument("--neo4j-user", required=True)
     ingest_auto.add_argument("--neo4j-pass", required=True)
+    ingest_auto.add_argument("--neo4j-database", default="memory")
     ingest_auto.add_argument("--user", required=True)
     ingest_auto.add_argument("--speaker-node-id")
+    ingest_auto.add_argument("--speaker-name")
+    ingest_auto.add_argument("--limit", type=int, default=200)
     ingest_auto.add_argument("--config", default=None)
     ingest_auto.set_defaults(func=cmd_ingest_auto_ingest)
 
@@ -223,6 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
     mic.add_argument("--user", default="default")
     mic.add_argument("--session-id", default="mic-session")
     mic.add_argument("--seconds", type=int, default=10)
+    mic.add_argument("--protocol", choices=["native_ws", "hermes_overlay_v1"], default="native_ws")
     mic.set_defaults(func=cmd_mic)
 
     return parser

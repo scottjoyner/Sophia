@@ -1,4 +1,17 @@
 # Sophia
+
+The current Hermes-facing service lives in `voice-agent/`. Use that deployment
+guide for containerized voice sidecar endpoints, Hermes dashboard integration,
+intent routing, and voice fingerprint enrollment.
+
+```bash
+cd voice-agent
+pip install -e .
+voice-agent serve --host 0.0.0.0 --port 8765 --config configs/dev.yaml
+```
+
+The older scripts below are preserved as historical experiments.
+
 ## Introduction
 Sophia is a dictation tool used for all those note takers out there who's brains seem to always be one step ahead of their pen or pencil. Currently Sophia will dictate whatever you say, and will play and pause music on spotify if you give her access to your account. 
 ## Future Developemnt 
