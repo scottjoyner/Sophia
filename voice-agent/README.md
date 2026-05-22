@@ -166,6 +166,22 @@ Without the insight extra, `build-voiceprint` refuses to create a production
 voiceprint. You can pass `--allow-fallback` only for smoke testing the graph
 write path; that fallback vector is not suitable for speaker identity.
 
+Build a balanced clone-training dataset from exported identity clips:
+
+```bash
+docker exec voice-agent-sophia-voice-1 python /app/scripts/voice_insight.py \
+  --config /app/configs/voice_insight.yaml build-clone-dataset --identity scott
+```
+
+This emits both `manifest.jsonl` and `metadata.csv` under
+`/ssd-ingest/voice-insight/training/<identity>/clone_dataset`, filtering out
+too-short/too-long segments and limiting per-recording samples so mixed source
+devices (dashcam, phone, recorder WAV) are represented.
+
+For the next-stage auth + response policy objective (authenticate Scott when
+detected, otherwise still respond in Scott clone voice), see
+`docs/voice_auth_response_plan.md`.
+
 ## Protocols
 `server.protocol` in config controls websocket message parsing:
 - `native_ws`: `{type, payload}`

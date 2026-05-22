@@ -29,6 +29,12 @@ voice_insight:
     max_segment_seconds: 18.0
     min_text_chars: 16
     max_samples_per_run: 100
+    clone_dataset:
+      min_segment_seconds: 3.0
+      max_segment_seconds: 14.0
+      min_text_chars: 20
+      max_samples: 400
+      max_samples_per_recording: 40
   legacy:
     speaker_seeds:
       # Add high-confidence legacy clusters here after reviewing the report.
