@@ -413,6 +413,80 @@ def build_voiceprint(
     }
 
 
+def _clean_transcript_for_clone(text: str) -> str:
+    cleaned = " ".join((text or "").strip().split())
+    return cleaned
+
+
+def build_clone_dataset(config: Dict[str, Any], identity: str, manifest: str | None = None) -> Dict[str, Any]:
+    train_cfg = training_config(config).get("clone_dataset", {})
+    min_seconds = float(train_cfg.get("min_segment_seconds", 3.0))
+    max_seconds = float(train_cfg.get("max_segment_seconds", 14.0))
+    min_text_chars = int(train_cfg.get("min_text_chars", 20))
+    max_samples = int(train_cfg.get("max_samples", 400))
+    max_samples_per_recording = int(train_cfg.get("max_samples_per_recording", 40))
+    if manifest:
+        with Path(manifest).open("r", encoding="utf-8") as handle:
+            rows = [json.loads(line) for line in handle if line.strip()]
+    else:
+        query = """
+        MATCH (:VoiceIdentity {identity_id: $identity})-[:HAS_TRAINING_SAMPLE]->(sample:VoiceTrainingSample)
+        WHERE sample.status = 'exported' AND coalesce(sample.container_path, sample.path) IS NOT NULL
+        RETURN sample.sample_id AS sample_id,
+               coalesce(sample.container_path, sample.path) AS path,
+               sample.recording_id AS recording_id,
+               sample.start_seconds AS start_seconds,
+               sample.end_seconds AS end_seconds,
+               sample.text AS text
+        ORDER BY sample.recording_id, sample.start_seconds
+        """
+        driver = driver_from_config(config)
+        with driver.session(database=target_db(config)) as session:
+            rows = [dict(record) for record in session.run(query, identity=identity)]
+        driver.close()
+    selected: List[Dict[str, Any]] = []
+    by_recording: Dict[str, int] = {}
+    for row in rows:
+        text = _clean_transcript_for_clone(str(row.get("text") or ""))
+        path = str(row.get("path") or row.get("container_path") or "")
+        start = float(row.get("start_seconds") or row.get("start") or 0.0)
+        end = float(row.get("end_seconds") or row.get("end") or 0.0)
+        duration = max(0.0, end - start)
+        recording_id = str(row.get("recording_id") or row.get("legacy_recording_key") or "unknown")
+        if len(text) < min_text_chars:
+            continue
+        if duration < min_seconds or duration > max_seconds:
+            continue
+        if not path or not Path(path).exists():
+            continue
+        if by_recording.get(recording_id, 0) >= max_samples_per_recording:
+            continue
+        selected.append({"path": path, "text": text, "duration_seconds": duration, "recording_id": recording_id})
+        by_recording[recording_id] = by_recording.get(recording_id, 0) + 1
+        if len(selected) >= max_samples:
+            break
+    out_root = Path(container_training_root(config)) / identity / "clone_dataset"
+    out_root.mkdir(parents=True, exist_ok=True)
+    manifest_path = out_root / "manifest.jsonl"
+    metadata_path = out_root / "metadata.csv"
+    with manifest_path.open("w", encoding="utf-8") as handle:
+        for row in selected:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    with metadata_path.open("w", encoding="utf-8") as handle:
+        handle.write("audio_path|text|recording_id|duration_seconds\n")
+        for row in selected:
+            safe_text = row["text"].replace("|", " ")
+            handle.write(f"{row['path']}|{safe_text}|{row['recording_id']}|{row['duration_seconds']:.3f}\n")
+    return {
+        "identity": identity,
+        "samples_selected": len(selected),
+        "recordings_covered": len(by_recording),
+        "manifest": str(manifest_path),
+        "metadata_csv": str(metadata_path),
+        "database": target_db(config),
+    }
+
+
 def _chunks(rows: Iterable[Dict[str, Any]], size: int) -> Iterable[List[Dict[str, Any]]]:
     chunk: List[Dict[str, Any]] = []
     for row in rows:
@@ -590,6 +664,10 @@ def main() -> int:
     voiceprint.add_argument("--limit", type=int, default=200)
     voiceprint.add_argument("--allow-fallback", action="store_true")
 
+    clone = sub.add_parser("build-clone-dataset")
+    clone.add_argument("--identity", default=None)
+    clone.add_argument("--manifest")
+
     args = parser.parse_args()
     config = load_config(args.config)
 
@@ -645,6 +723,9 @@ def main() -> int:
                 indent=2,
             )
         )
+    elif args.command == "build-clone-dataset":
+        identity = args.identity or config.get("voice_insight", {}).get("default_identity", "scott")
+        print(json.dumps(build_clone_dataset(config, identity, manifest=args.manifest), indent=2))
     return 0
 
 
