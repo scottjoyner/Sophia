@@ -178,6 +178,10 @@ This emits both `manifest.jsonl` and `metadata.csv` under
 too-short/too-long segments and limiting per-recording samples so mixed source
 devices (dashcam, phone, recorder WAV) are represented.
 
+For the next-stage auth + response policy objective (authenticate Scott when
+detected, otherwise still respond in Scott clone voice), see
+`docs/voice_auth_response_plan.md`.
+
 ## Protocols
 `server.protocol` in config controls websocket message parsing:
 - `native_ws`: `{type, payload}`
