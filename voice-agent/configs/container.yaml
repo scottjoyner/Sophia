@@ -8,7 +8,7 @@ paths:
   capture_dir: /captures
 runtime:
   max_memory_gb: 8
-  allow_hf_downloads: false
+  allow_hf_downloads: true
 llm:
   provider: mock
   intent_provider: mock

@@ -10,7 +10,7 @@ class SpeakerEmbedder:
     def __init__(self):
         self.model = None
         if importlib.util.find_spec("speechbrain") is not None:
-            from speechbrain.pretrained import EncoderClassifier
+            from speechbrain.inference import EncoderClassifier
 
             self.model = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
 
