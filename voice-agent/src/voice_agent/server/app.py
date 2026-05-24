@@ -127,9 +127,17 @@ CAPTURE_PAGE = """<!doctype html>
     .mode-btn { flex: 1; border: 0; border-radius: 0; padding: 10px 16px; font: inherit; font-weight: 600; font-size: 13px; cursor: pointer; background: transparent; color: #64748b; transition: all .15s; min-height: auto; }
     .mode-btn.active { background: #1e293b; color: #e2e8f0; }
     .mode-btn:hover:not(.active) { background: #1a2330; color: #94a3b8; }
-    .meeting-segment { padding: 8px 10px; border-left: 3px solid #7dd3fc; margin: 6px 0; background: #0f172a; border-radius: 0 6px 6px 0; font-size: 13px; line-height: 1.45; }
+    .meeting-segment { padding: 8px 10px; border-left: 3px solid #7dd3fc; margin: 6px 0; background: #0f172a; border-radius: 0 6px 6px 0; font-size: 13px; line-height: 1.45; cursor: pointer; transition: opacity .15s; }
+    .meeting-segment.filtered-out { opacity: .25; }
     .meeting-segment .speaker-label { font-weight: 600; color: #7dd3fc; font-size: 12px; margin-bottom: 2px; }
     .meeting-segment .seg-time { color: #64748b; font-size: 11px; margin-left: 8px; }
+    .speaker-timeline { display: flex; height: 24px; border-radius: 6px; overflow: hidden; margin: 6px 0; background: #1e293b; cursor: pointer; }
+    .speaker-timeline .tl-seg { height: 100%; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: #000c; transition: opacity .15s; min-width: 4px; }
+    .speaker-timeline .tl-seg:hover { opacity: .8; }
+    .speaker-filter { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+    .speaker-filter button { flex: 0; min-height: auto; padding: 4px 10px; font-size: 11px; border-radius: 999px; border: 1px solid #334155; background: transparent; color: #94a3b8; cursor: pointer; transition: all .15s; }
+    .speaker-filter button:hover { background: #1e293b; }
+    .speaker-filter button.active { background: #334155; color: #e2e8f0; border-color: #7dd3fc; }
     .dispatch-entry { padding: 6px 8px; border-left: 3px solid #555; margin: 4px 0; background: #0f172a; border-radius: 0 4px 4px 0; font-size: 12px; line-height: 1.4; }
     .dispatch-entry.sent { border-left-color: #34d399; }
     .dispatch-entry.failed { border-left-color: #fb7185; }
@@ -262,6 +270,8 @@ CAPTURE_PAGE = """<!doctype html>
   <section id="meetingResults" style="display:none;">
     <h2>&#x1F4CA; Results</h2>
     <div id="meetingMeta" class="inline-meta"></div>
+    <div id="speakerTimeline" class="speaker-timeline"></div>
+    <div id="speakerFilter" class="speaker-filter"></div>
     <div id="meetingTranscript" style="margin-top:12px;"></div>
     <div id="meetingSummary" style="margin-top:12px;display:none;">
       <h3>&#x1F4DD; Summary</h3>
@@ -780,17 +790,7 @@ CAPTURE_PAGE = """<!doctype html>
           const graphBadge = data.graph_saved ? '&#x1F5C4; graph saved' : (data.graph_error ? '&#x26A0; graph error' : '');
           meetingStatus.textContent = 'Done. ' + data.segments.length + ' segments, ' + data.num_speakers + ' speaker(s).';
           meetingMeta.innerHTML = '<span>' + data.duration_s + 's audio</span><span>' + data.num_speakers + ' speaker(s)</span><span>' + data.segments.length + ' segments</span>' + (graphBadge ? '<span>' + graphBadge + '</span>' : '');
-          meetingTranscript.innerHTML = data.segments.map(s => {
-            const name = s.name || 'Speaker ' + (s.speaker + 1);
-            const time = s.start.toFixed(1) + 's - ' + s.end.toFixed(1) + 's';
-            return '<div class="meeting-segment"><div class="speaker-label">' + name + ' <span class="seg-time">' + time + (s.confidence ? ' (' + (s.confidence*100).toFixed(0) + '%)' : '') + '</span></div><div>' + (s.transcript || '(no speech)') + '</div></div>';
-          }).join('');
-          if (data.summary) {
-            meetingSummary.style.display = '';
-            summaryText.textContent = data.summary;
-          } else {
-            meetingSummary.style.display = 'none';
-          }
+          renderTimeline(data);
           meetingResults.style.display = '';
           if (autoDispatchToggle.checked && data.transcript) {
             meetingStatus.textContent = 'Done. Dispatching to AssistX...';
@@ -817,6 +817,56 @@ CAPTURE_PAGE = """<!doctype html>
       processMeetingBtn.disabled = false;
     }
   }
+
+  const SPEAKER_COLORS = ['#7dd3fc','#34d399','#fbbf24','#fb7185','#a78bfa','#f472b6','#fb923c','#4ade80'];
+  let meetingFilterSpeaker = null;
+
+  function renderTimeline(data) {
+    const dur = data.duration_s || 1;
+    const segments = data.segments || [];
+    const tl = document.getElementById('speakerTimeline');
+    tl.innerHTML = segments.map(s => {
+      const w = Math.max(2, ((s.end - s.start) / dur) * 100);
+      const color = SPEAKER_COLORS[(s.speaker + 1) % SPEAKER_COLORS.length];
+      return '<div class="tl-seg" style="width:' + w + '%;background:' + color + ';" title="' + (s.name || 'Spk ' + (s.speaker+1)) + ' ' + s.start.toFixed(1) + 's-' + s.end.toFixed(1) + 's"></div>';
+    }).join('');
+
+    const names = [...new Set(segments.map(s => s.name || 'Speaker ' + (s.speaker + 1)))];
+    const filter = document.getElementById('speakerFilter');
+    filter.innerHTML = '<button class="active" data-spk="">All</button>' + names.map(n => {
+      const seg = segments.find(s => (s.name || 'Speaker ' + (s.speaker + 1)) === n);
+      const idx = seg ? (seg.speaker + 1) % SPEAKER_COLORS.length : 0;
+      return '<button data-spk="' + n.replace(/"/g,'&quot;') + '" style="border-color:' + SPEAKER_COLORS[idx] + ';">' + n + '</button>';
+    }).join('');
+    filter.querySelectorAll('button').forEach(btn => {
+      btn.onclick = () => {
+        meetingFilterSpeaker = btn.dataset.spk || null;
+        filter.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        renderSegments(data);
+      };
+    });
+    meetingFilterSpeaker = null;
+    renderSegments(data);
+  }
+
+  function renderSegments(data) {
+    const segments = data.segments || [];
+    const html = segments.map(s => {
+      const name = s.name || 'Speaker ' + (s.speaker + 1);
+      const match = meetingFilterSpeaker && name !== meetingFilterSpeaker;
+      const time = s.start.toFixed(1) + 's - ' + s.end.toFixed(1) + 's';
+      const color = SPEAKER_COLORS[(s.speaker + 1) % SPEAKER_COLORS.length];
+      return '<div class="meeting-segment' + (match ? ' filtered-out' : '') + '" style="border-left-color:' + color + ';"><div class="speaker-label">' + name + ' <span class="seg-time">' + time + (s.confidence ? ' (' + (s.confidence*100).toFixed(0) + '%)' : '') + '</span></div><div>' + (s.transcript || '(no speech)') + '</div></div>';
+    }).join('');
+    meetingTranscript.innerHTML = html;
+    if (data.summary) {
+      meetingSummary.style.display = '';
+      summaryText.textContent = data.summary;
+    } else {
+      meetingSummary.style.display = 'none';
+    }
+  }
   processMeetingBtn.onclick = processMeeting;
 
   async function loadMeetingHistory() {
@@ -833,10 +883,21 @@ CAPTURE_PAGE = """<!doctype html>
       meetingHistoryList.innerHTML = data.meetings.map(m => {
         const date = m.created_at ? new Date(m.created_at).toLocaleDateString() : '?';
         const label = '[' + date + '] ' + m.duration_s + 's, ' + m.num_speakers + ' spk, ' + m.segment_count + ' segs';
-        return '<div class="meeting-segment" style="cursor:pointer;font-size:12px;" onclick="loadMeetingDetail(\'' + m.id + '\')">'
+        return '<div class="meeting-segment" style="cursor:pointer;font-size:12px;position:relative;" onclick="loadMeetingDetail(\'' + m.id + '\')">'
           + '<div class="speaker-label">' + label + (m.has_summary ? ' &#x1F4DD;' : '') + '</div>'
-          + '<div>' + (m.transcript || '(no transcript)') + '</div></div>';
+          + '<div>' + (m.transcript || '(no transcript)') + '</div>'
+          + '<span class="del-meeting" data-id="' + m.id + '" style="position:absolute;top:4px;right:6px;cursor:pointer;color:#fb7185;font-size:15px;line-height:1;" title="Delete meeting">&times;</span></div>';
       }).join('');
+      meetingHistoryList.querySelectorAll('.del-meeting').forEach(el => {
+        el.onclick = async (ev) => {
+          ev.stopPropagation();
+          if (!confirm('Delete this meeting from Neo4j?')) return;
+          try {
+            const r = await fetch('/meeting/history/' + encodeURIComponent(el.dataset.id), { method: 'DELETE' });
+            if (r.ok) loadMeetingHistory();
+          } catch {}
+        };
+      });
       meetingHistoryStatus.textContent = data.meetings.length + ' meetings';
     } catch (err) {
       meetingHistoryStatus.textContent = 'Error loading history: ' + err.message;
@@ -880,12 +941,26 @@ CAPTURE_PAGE = """<!doctype html>
         return;
       }
       speakerList.innerHTML = data.users.map(u => {
-        const devs = u.devices && u.devices.length ? ' <span style="color:#64748b;font-size:11px;">devices: ' + u.devices.join(', ') + '</span>' : '';
+        const devs = u.devices && u.devices.length
+          ? ' <div style="margin-top:4px;font-size:11px;color:#64748b;">devices: ' + u.devices.map(d =>
+              '<span style="display:inline-flex;align-items:center;gap:2px;margin-right:6px;">' + d +
+              ' <span class="del-device" data-user="' + u.user_id + '" data-device="' + d + '" style="cursor:pointer;color:#fb7185;font-size:13px;line-height:1;" title="Delete device">&times;</span></span>'
+            ).join('') + '</div>'
+          : '';
         return '<div class="meeting-segment" style="font-size:13px;"><span class="speaker-label">' + u.user_id + '</span>'
           + ' <span style="color:#94a3b8;">' + u.sample_count + ' samples</span>'
           + ' <span style="color:#64748b;font-size:11px;">threshold: ' + u.threshold + '</span>'
           + devs + '</div>';
       }).join('');
+      speakerList.querySelectorAll('.del-device').forEach(el => {
+        el.onclick = async () => {
+          if (!confirm('Delete device "' + el.dataset.device + '" for ' + el.dataset.user + '?')) return;
+          try {
+            const r = await fetch('/voiceprints/device/' + encodeURIComponent(el.dataset.user) + '/' + encodeURIComponent(el.dataset.device), { method: 'DELETE' });
+            if (r.ok) loadSpeakers();
+          } catch {}
+        };
+      });
     } catch (err) {
       speakerList.innerHTML = '<div style="color:#fb7185;font-size:13px;">Error: ' + err.message + '</div>';
     }
@@ -1794,6 +1869,32 @@ def create_app(config: AppConfig) -> FastAPI:
             return {"users": users, "count": len(users)}
         except Exception as exc:
             return {"users": [], "error": f"{type(exc).__name__}: {exc}"}
+
+    @app.delete("/voiceprints/device/{user_id}/{device_id}")
+    async def voiceprints_delete_device(user_id: str, device_id: str) -> Dict[str, Any]:
+        from ..util.db import Database
+        try:
+            db = Database(Path(config.paths.artifacts_dir) / "results.sqlite")
+            cur = db.conn.cursor()
+            cur.execute("DELETE FROM voiceprint_devices WHERE user_id=? AND device_id=?", (user_id, device_id))
+            db.conn.commit()
+            return {"ok": True, "user_id": user_id, "device_id": device_id}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
+
+    @app.delete("/meeting/history/{meeting_id}")
+    async def meeting_delete(meeting_id: str) -> Dict[str, Any]:
+        if not config.neo4j.password:
+            raise HTTPException(status_code=400, detail="Neo4j not configured")
+        from neo4j import GraphDatabase
+        try:
+            driver = GraphDatabase.driver(config.neo4j.uri, auth=(config.neo4j.user, config.neo4j.password))
+            with driver.session(database=config.neo4j.database) as sess:
+                sess.run("MATCH (m:Meeting {id: $id})-[:HAS_SEGMENT]->(seg:MeetingSegment) DETACH DELETE seg, m", id=meeting_id)
+            driver.close()
+            return {"ok": True, "meeting_id": meeting_id}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
 
     dispatch_history: list = []
 

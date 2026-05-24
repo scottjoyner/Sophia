@@ -96,24 +96,33 @@
 - [x] Auto-dispatch toggle (localStorage persistence)
 - [x] Dispatch voice_auth events on verify, meeting_transcript events on summarize
 
-### Phase 5: Async & Progress
-- [ ] Background task processing for long meetings (return task ID, poll for result)
-- [ ] WebSocket progress events during meeting processing (VAD → embed → cluster → transcribe → summarize)
+### Phase 5: Async & Progress ✅
+- [x] Background task processing for long meetings (return task ID, poll for result)
+- [x] Progress events via EventBus + `GET /meeting/status/{task_id}` polling
+- [x] UI polls every 1.5s, updates progress bar + step text
+- [ ] WebSocket progress events during meeting processing (nice-to-have)
 - [ ] Live diarization over WebSocket (real-time speaker tracking)
 
-### Phase 6: Multi-Microphone Robustness ✅ / 🔜
+### Phase 6: Multi-Microphone Robustness ✅
 - [x] `voiceprint_devices` SQLite table (per-device embeddings)
 - [x] Enroll with device_id parameter (stores device-specific voiceprint)
 - [x] Verify iterates all device entries, returns best match + device_id
 - [x] UI: device label input, matched device in auth result, devices in speaker list
+- [x] Delete device endpoint + UI
 - [ ] Evaluate cross-mic verification accuracy (known gap)
-- [ ] Optional: UI for listing/managing/deleting per-device voiceprints
 
 ### Phase 7: Real-World Testing
 - [ ] End-to-end WebSocket session with live auth
 - [ ] Meeting mode with actual multi-speaker audio
 - [ ] TTS quality evaluation with live voice reference
 - [ ] Test dispatch hub with real assistx instance
+
+### Phase 8: UI Polish
+- [x] Speaker timeline visualization (color-coded horizontal bar)
+- [x] Speaker filter buttons (click to isolate one speaker)
+- [x] Per-speaker color coding on segment borders
+- [x] Delete device from speaker management UI
+- [x] Delete meeting from history UI
 
 ---
 
