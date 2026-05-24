@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections import OrderedDict
@@ -170,6 +171,10 @@ CAPTURE_PAGE = """<!doctype html>
         <label for="sessionId">Session</label>
         <input id="sessionId" value="mobile">
       </div>
+      <div>
+        <label for="deviceId">Device/Mic</label>
+        <input id="deviceId" placeholder="phone, headset, etc." style="font-size:13px;padding:8px 10px;">
+      </div>
     </div>
     <div class="btn-group">
       <button id="startBtn" class="primary">&#x23FA; Record</button>
@@ -192,6 +197,7 @@ CAPTURE_PAGE = """<!doctype html>
         <div id="authAccepted" class="auth-accepted">--</div>
       </div>
       <div id="enrollCount" class="enroll-count"></div>
+      <div id="authDevice" class="enroll-count" style="font-size:11px;color:#64748b;margin-top:2px;"></div>
     </div>
     <div class="btn-group">
       <button id="verifyBtn" class="secondary" disabled>&#x1F50D; Verify Voice</button>
@@ -234,6 +240,19 @@ CAPTURE_PAGE = """<!doctype html>
     <h2>&#x1F91D; Meeting Mode <span class="sub">diarize, transcribe &amp; summarize</span></h2>
     <label for="meetingFile">Upload meeting audio</label>
     <input id="meetingFile" type="file" accept="audio/*,video/*">
+    <div class="inline-meta" style="margin-top:8px;gap:12px;">
+      <label style="font-size:11px;display:flex;align-items:center;gap:4px;">
+        Max speakers:
+        <select id="meetingMaxSpeakers" style="font-size:11px;padding:2px 4px;">
+          <option value="">auto</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+          <option value="6">6</option>
+        </select>
+      </label>
+    </div>
     <div class="btn-group" style="margin-top:10px;">
       <button id="processMeetingBtn" class="warning" disabled>&#x2699; Process Meeting</button>
     </div>
@@ -472,25 +491,17 @@ CAPTURE_PAGE = """<!doctype html>
     authStatus.textContent = text;
   }
 
-  function showAuthResult(score, accepted) {
-    lastScore = score;
-    lastAccepted = accepted;
-    lastAuthResult = { score, accepted, userId: userId.value };
+  function showAuthResult(score, accepted, deviceLabel) {
     authResult.classList.remove('hidden');
     authScore.textContent = (score * 100).toFixed(0) + '%';
-    authScore.className = 'auth-score ' + (accepted ? 'pass' : 'fail');
-    authAccepted.textContent = accepted ? '✓ Accepted' : '✗ Rejected';
-    authAccepted.style.color = accepted ? '#34d399' : '#fb7185';
-    setAuthPill(accepted ? 'pass' : 'fail', accepted ? '✓ ' + (score*100).toFixed(0) + '%' : '✗ ' + (score*100).toFixed(0) + '%');
-    enrollBtn.disabled = !accepted;
-    dispatchAuthBtn.disabled = !accepted;
-    if (!accepted) {
-      enrollBtn.title = 'Verify successfully first to enable enrollment';
-      dispatchAuthBtn.title = 'Verify successfully first to enable dispatch';
-    } else {
-      enrollBtn.title = '';
-      dispatchAuthBtn.title = '';
+    authAccepted.textContent = accepted ? 'ACCEPTED' : 'REJECTED';
+    authAccepted.className = accepted ? 'auth-accepted pass' : 'auth-accepted fail';
+    const devEl = document.getElementById('authDevice');
+    if (devEl) {
+      devEl.textContent = deviceLabel ? 'via ' + deviceLabel : '';
+      devEl.style.display = deviceLabel ? '' : 'none';
     }
+  }
   }
 
   async function verifyVoice() {
@@ -505,16 +516,17 @@ CAPTURE_PAGE = """<!doctype html>
       const res = await fetch('/auth/verify', { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Verify failed');
-      showAuthResult(data.score, data.accepted);
+      const matchedDevice = data.device_id && data.device_id !== 'default' ? ' [' + data.device_id + ']' : '';
+      showAuthResult(data.score, data.accepted, matchedDevice);
       const msg = data.accepted
-        ? 'Voice verified ✓ score=' + data.score.toFixed(4)
+        ? 'Voice verified ✓ score=' + data.score.toFixed(4) + matchedDevice
         : 'Voice rejected ✗ score=' + data.score.toFixed(4) + ' — try recording again in a quiet space';
       saveStatus.textContent = msg;
       if (data.accepted && autoDispatchToggle.checked) {
         saveStatus.textContent = msg + ' — dispatching to AssistX...';
         const result = await autoDispatch('voice_auth',
           'Voice auth: user=' + userId.value + ' score=' + (data.score * 100).toFixed(0) + '%',
-          { score: data.score, accepted: data.accepted, userId: userId.value }
+          { score: data.score, accepted: data.accepted, userId: userId.value, device_id: data.device_id }
         );
         saveStatus.textContent = msg + (result.sent ? ' — dispatched ✓' : ' — dispatch failed');
       }
@@ -534,15 +546,18 @@ CAPTURE_PAGE = """<!doctype html>
     const form = new FormData();
     form.append('audio', audioSrc, audioSrc.name || 'capture.webm');
     form.append('user_id', userId.value || 'default');
+    const devId = document.getElementById('deviceId').value.trim();
+    if (devId) form.append('device_id', devId);
     saveStatus.textContent = 'Enrolling voice sample...';
     setAuthPill('enrolling', 'enrolling...');
     try {
       const res = await fetch('/voiceprints/enroll', { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Enroll failed');
-      setAuthPill('pass', 'enrolled (' + data.sample_count + ')');
-      enrollCount.textContent = data.sample_count + ' samples enrolled';
-      saveStatus.textContent = 'Voice enrolled ✓ (' + data.sample_count + ' total samples)';
+      const label = data.device_id && data.device_id !== 'default' ? ' (' + data.device_id + ')' : '';
+      setAuthPill('pass', 'enrolled' + label);
+      enrollCount.textContent = data.sample_count + ' samples enrolled' + label;
+      saveStatus.textContent = 'Voice enrolled ✓ (' + data.sample_count + ' total samples)' + label;
     } catch (err) {
       setAuthPill('fail', 'error');
       saveStatus.textContent = 'Enroll error: ' + err.message;
@@ -735,46 +750,64 @@ CAPTURE_PAGE = """<!doctype html>
     const file = meetingFile.files && meetingFile.files[0];
     if (!file) return;
     processMeetingBtn.disabled = true;
-    meetingProgress.style.width = '10%';
-    meetingStatus.textContent = 'Processing meeting audio...';
+    meetingProgress.style.width = '5%';
+    meetingStatus.textContent = 'Uploading...';
     meetingResults.style.display = 'none';
     const form = new FormData();
     form.append('audio', file, file.name || 'meeting.webm');
     form.append('summarize', 'true');
+    const maxSpk = document.getElementById('meetingMaxSpeakers').value;
+    if (maxSpk) form.append('max_speakers', maxSpk);
     try {
-      meetingProgress.style.width = '30%';
       const res = await fetch('/meeting/process', { method: 'POST', body: form });
-      meetingProgress.style.width = '80%';
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Processing failed');
-      meetingProgress.style.width = '100%';
-      lastMeetingResult = data;
-      const graphBadge = data.graph_saved ? '&#x1F5C4; graph saved' : (data.graph_error ? '&#x26A0; graph error' : '');
-      meetingStatus.textContent = 'Done. ' + data.segments.length + ' segments, ' + data.num_speakers + ' speaker(s).';
-      meetingMeta.innerHTML = '<span>' + data.duration_s + 's audio</span><span>' + data.num_speakers + ' speaker(s)</span><span>' + data.segments.length + ' segments</span>' + (graphBadge ? '<span>' + graphBadge + '</span>' : '');
-      meetingTranscript.innerHTML = data.segments.map(s => {
-        const name = s.name || 'Speaker ' + (s.speaker + 1);
-        const time = s.start.toFixed(1) + 's - ' + s.end.toFixed(1) + 's';
-        return '<div class="meeting-segment"><div class="speaker-label">' + name + ' <span class="seg-time">' + time + (s.confidence ? ' (' + (s.confidence*100).toFixed(0) + '%)' : '') + '</span></div><div>' + (s.transcript || '(no speech)') + '</div></div>';
-      }).join('');
-      if (data.summary) {
-        meetingSummary.style.display = '';
-        summaryText.textContent = data.summary;
-      } else {
-        meetingSummary.style.display = 'none';
-      }
-      meetingResults.style.display = '';
-      if (autoDispatchToggle.checked && data.transcript) {
-        meetingStatus.textContent = 'Done. Dispatching to AssistX...';
-        const dispatchMeta = {
-          duration_s: data.duration_s,
-          num_speakers: data.num_speakers,
-          meeting_id: data.meeting_id,
-          graph_saved: data.graph_saved,
-        };
-        const result = await autoDispatch('meeting_transcript', data.transcript.slice(0, 500), dispatchMeta);
-        if (result.sent) {
-          meetingMeta.innerHTML += '<span>&#x1F4E4; dispatched</span>';
+      const init = await res.json();
+      if (!res.ok) throw new Error(init.detail || 'Upload failed');
+      const taskId = init.task_id;
+      meetingStatus.textContent = 'Processing...';
+      let done = false;
+      while (!done) {
+        await new Promise(r => setTimeout(r, 1500));
+        const sr = await fetch('/meeting/status/' + taskId);
+        const t = await sr.json();
+        if (!sr.ok) throw new Error(t.detail || 'Status check failed');
+        meetingProgress.style.width = Math.max(5, t.progress_pct || 0) + '%';
+        meetingStatus.textContent = t.step || 'Processing...';
+        if (t.status === 'completed' && t.result) {
+          done = true;
+          const data = t.result;
+          meetingProgress.style.width = '100%';
+          lastMeetingResult = data;
+          const graphBadge = data.graph_saved ? '&#x1F5C4; graph saved' : (data.graph_error ? '&#x26A0; graph error' : '');
+          meetingStatus.textContent = 'Done. ' + data.segments.length + ' segments, ' + data.num_speakers + ' speaker(s).';
+          meetingMeta.innerHTML = '<span>' + data.duration_s + 's audio</span><span>' + data.num_speakers + ' speaker(s)</span><span>' + data.segments.length + ' segments</span>' + (graphBadge ? '<span>' + graphBadge + '</span>' : '');
+          meetingTranscript.innerHTML = data.segments.map(s => {
+            const name = s.name || 'Speaker ' + (s.speaker + 1);
+            const time = s.start.toFixed(1) + 's - ' + s.end.toFixed(1) + 's';
+            return '<div class="meeting-segment"><div class="speaker-label">' + name + ' <span class="seg-time">' + time + (s.confidence ? ' (' + (s.confidence*100).toFixed(0) + '%)' : '') + '</span></div><div>' + (s.transcript || '(no speech)') + '</div></div>';
+          }).join('');
+          if (data.summary) {
+            meetingSummary.style.display = '';
+            summaryText.textContent = data.summary;
+          } else {
+            meetingSummary.style.display = 'none';
+          }
+          meetingResults.style.display = '';
+          if (autoDispatchToggle.checked && data.transcript) {
+            meetingStatus.textContent = 'Done. Dispatching to AssistX...';
+            const dispatchMeta = {
+              duration_s: data.duration_s,
+              num_speakers: data.num_speakers,
+              meeting_id: data.meeting_id,
+              graph_saved: data.graph_saved,
+            };
+            const dispatchResult = await autoDispatch('meeting_transcript', data.transcript.slice(0, 500), dispatchMeta);
+            if (dispatchResult.sent) {
+              meetingMeta.innerHTML += '<span>&#x1F4E4; dispatched</span>';
+            }
+          }
+          meetingStatus.textContent = 'Done. ' + data.segments.length + ' segments, ' + data.num_speakers + ' speaker(s).';
+        } else if (t.status === 'error') {
+          throw new Error(t.error || 'Processing failed');
         }
       }
     } catch (err) {
@@ -847,9 +880,11 @@ CAPTURE_PAGE = """<!doctype html>
         return;
       }
       speakerList.innerHTML = data.users.map(u => {
+        const devs = u.devices && u.devices.length ? ' <span style="color:#64748b;font-size:11px;">devices: ' + u.devices.join(', ') + '</span>' : '';
         return '<div class="meeting-segment" style="font-size:13px;"><span class="speaker-label">' + u.user_id + '</span>'
           + ' <span style="color:#94a3b8;">' + u.sample_count + ' samples</span>'
-          + ' <span style="color:#64748b;font-size:11px;">threshold: ' + u.threshold + '</span></div>';
+          + ' <span style="color:#64748b;font-size:11px;">threshold: ' + u.threshold + '</span>'
+          + devs + '</div>';
       }).join('');
     } catch (err) {
       speakerList.innerHTML = '<div style="color:#fb7185;font-size:13px;">Error: ' + err.message + '</div>';
@@ -1058,6 +1093,170 @@ CAPTURE_PAGE = """<!doctype html>
 """
 
 
+class MeetingTaskManager:
+    def __init__(self):
+        self._tasks: Dict[str, Dict[str, Any]] = {}
+
+    def create(self, task_id: str) -> None:
+        self._tasks[task_id] = {
+            "task_id": task_id,
+            "status": "queued",
+            "progress_pct": 0,
+            "step": "queued",
+            "result": None,
+            "error": None,
+        }
+
+    def update(self, task_id: str, status: str, step: str, pct: int, result: Any = None, error: str | None = None) -> None:
+        t = self._tasks.get(task_id)
+        if t is None:
+            return
+        t["status"] = status
+        t["step"] = step
+        t["progress_pct"] = pct
+        if result is not None:
+            t["result"] = result
+        if error is not None:
+            t["error"] = error
+
+    def get(self, task_id: str) -> Dict[str, Any] | None:
+        return self._tasks.get(task_id)
+
+
+async def _process_meeting_background(
+    config: AppConfig,
+    bus: EventBus,
+    meeting_tasks: MeetingTaskManager,
+    manager: SessionManager,
+    intent_provider: Any | None,
+    task_id: str,
+    audio_data: bytes,
+    summarize: bool,
+    max_speakers: int | None,
+) -> None:
+    tmp_dir = Path(config.paths.artifacts_dir) / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    in_path = tmp_dir / f"meeting_{task_id}.webm"
+    wav_path = in_path.with_suffix(".wav")
+    try:
+        meeting_tasks.update(task_id, "processing", "converting audio", 5)
+        bus.publish("meeting_progress", {"task_id": task_id, "step": "converting", "pct": 5})
+        in_path.write_bytes(audio_data)
+        import subprocess
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(in_path), "-f", "wav", "-acodec", "pcm_s16le",
+             "-ac", "1", "-ar", "16000", str(wav_path)],
+            capture_output=True, timeout=60,
+        )
+        if not wav_path.exists():
+            raise RuntimeError("ffmpeg conversion failed")
+        samples, sr = read_wav(wav_path)
+        duration_s = len(samples) / sr
+        if duration_s < 1.0:
+            raise RuntimeError("Audio too short (<1s)")
+
+        meeting_tasks.update(task_id, "processing", "diarizing speakers", 20)
+        bus.publish("meeting_progress", {"task_id": task_id, "step": "diarizing", "pct": 20})
+        segments = diarize(samples, sr, max_speakers=max_speakers)
+
+        meeting_tasks.update(task_id, "processing", "identifying speakers", 35)
+        bus.publish("meeting_progress", {"task_id": task_id, "step": "identifying", "pct": 35})
+        registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite")
+        enrolled = {}
+        for uid in ["scott", "default"]:
+            rec = registry.get(uid)
+            if rec:
+                enrolled[uid] = rec
+        if enrolled:
+            embedder = SpeakerEmbedder()
+            segments = identify_speakers(segments, enrolled, embedder, sr, samples)
+
+        n_segs = len(segments)
+        full_transcript_parts = []
+        for idx, seg in enumerate(segments):
+            start_samp = int(seg["start"] * sr)
+            end_samp = int(seg["end"] * sr)
+            chunk = samples[start_samp:end_samp]
+            if len(chunk) < int(sr * 0.3):
+                seg["transcript"] = ""
+                continue
+            pct = 40 + int(50 * (idx / n_segs)) if n_segs else 40
+            meeting_tasks.update(task_id, "processing", f"transcribing segment {idx+1}/{n_segs}", pct)
+            bus.publish("meeting_progress", {"task_id": task_id, "step": "transcribing", "pct": pct, "segment": idx + 1, "total": n_segs})
+            text = refine_transcript(chunk, sr, config.stt)
+            seg["transcript"] = text
+            name = seg.get("name", f"Speaker {seg['speaker'] + 1}")
+            full_transcript_parts.append(f"[{name}]: {text}")
+
+        summary = None
+        if summarize and full_transcript_parts:
+            meeting_tasks.update(task_id, "processing", "summarizing", 92)
+            bus.publish("meeting_progress", {"task_id": task_id, "step": "summarizing", "pct": 92})
+            meeting_text = "\n".join(full_transcript_parts)
+            prompt = (
+                "Summarize this meeting transcript. Extract:\n"
+                "- Key decisions made\n"
+                "- Action items with owner if mentioned\n"
+                "- Main discussion topics\n\n"
+                f"Transcript:\n{meeting_text}"
+            )
+            try:
+                if intent_provider:
+                    summary = intent_provider.complete(prompt).content.strip()
+                else:
+                    summary = manager.pipeline.ralph.run(prompt)
+            except Exception:
+                summary = None
+
+        meeting_id = uuid.uuid4().hex
+        full_transcript = "\n".join(full_transcript_parts)
+        graph_saved = False
+        graph_error = None
+        if config.neo4j.password:
+            meeting_tasks.update(task_id, "processing", "saving to graph", 95)
+            bus.publish("meeting_progress", {"task_id": task_id, "step": "saving", "pct": 95})
+            try:
+                from ..auth.neo4j_ingest import save_meeting_to_neo4j
+                save_meeting_to_neo4j(
+                    config.neo4j.uri,
+                    config.neo4j.user,
+                    config.neo4j.password,
+                    meeting_id=meeting_id,
+                    transcript=full_transcript,
+                    segments=segments,
+                    duration_s=duration_s,
+                    num_speakers=len(set(s["speaker"] for s in segments if s["speaker"] >= 0)),
+                    summary=summary,
+                    database=config.neo4j.database,
+                )
+                graph_saved = True
+            except Exception as exc:
+                graph_error = f"{type(exc).__name__}: {exc}"
+
+        num_speakers = len(set(s["speaker"] for s in segments if s["speaker"] >= 0))
+        result = {
+            "ok": True,
+            "meeting_id": meeting_id,
+            "duration_s": round(duration_s, 1),
+            "num_speakers": num_speakers,
+            "segments": segments,
+            "transcript": full_transcript,
+            "summary": summary,
+            "graph_saved": graph_saved,
+            "graph_error": graph_error,
+        }
+        meeting_tasks.update(task_id, "completed", "done", 100, result=result)
+        bus.publish("meeting_progress", {"task_id": task_id, "step": "done", "pct": 100})
+    except Exception as exc:
+        error_msg = f"{type(exc).__name__}: {exc}"
+        meeting_tasks.update(task_id, "error", "failed", 0, error=error_msg)
+        bus.publish("meeting_progress", {"task_id": task_id, "step": "error", "error": error_msg})
+    finally:
+        for p in [in_path, wav_path]:
+            if p.exists():
+                p.unlink(missing_ok=True)
+
+
 def create_app(config: AppConfig) -> FastAPI:
     app = FastAPI(title="Sophia Voice Agent", version="0.1.0")
     bus = EventBus()
@@ -1067,9 +1266,11 @@ def create_app(config: AppConfig) -> FastAPI:
         event_callback=lambda event_type, payload: bus.publish(event_type, payload),
     )
     protocol = build_protocol_adapter(config.server.protocol)
+    meeting_tasks = MeetingTaskManager()
     app.state.config = config
     app.state.manager = manager
     app.state.events = bus
+    app.state.meeting_tasks = meeting_tasks
     intent_provider = None
     if config.llm.intent_provider in {"openai", "hermes"} and config.llm.intent_base_url:
         intent_provider = OpenAICompatProvider(
@@ -1377,6 +1578,7 @@ def create_app(config: AppConfig) -> FastAPI:
     async def voiceprints_enroll(
         audio: UploadFile | None = File(default=None),
         user_id: str = Form(default="scott"),
+        device_id: str = Form(default=""),
     ) -> Dict[str, Any]:
         if audio is None:
             raise HTTPException(status_code=400, detail="audio file is required")
@@ -1405,21 +1607,39 @@ def create_app(config: AppConfig) -> FastAPI:
             embedding = embedder.embed(samples, sr)
             from ..auth.registry import VoiceprintRegistry
             registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite")
-            existing = registry.get(user_id)
-            if existing:
-                old_emb = existing["embedding"]
-                n = existing.get("samples", {}).get("count", 1)
-                merged = [(old_emb[i] * n + embedding[i]) / (n + 1) for i in range(len(embedding))]
-                samples_info = existing.get("samples", {})
-                samples_info["count"] = n + 1
-                samples_info.setdefault("files", []).append(str(wav_path))
-                registry.save(user_id, merged, samples_info, existing["threshold"])
-                sample_count = n + 1
+
+            did = device_id.strip() or "default"
+            if did == "default":
+                existing = registry.get(user_id)
+                if existing:
+                    old_emb = existing["embedding"]
+                    n = existing.get("samples", {}).get("count", 1)
+                    merged = [(old_emb[i] * n + embedding[i]) / (n + 1) for i in range(len(embedding))]
+                    samples_info = existing.get("samples", {})
+                    samples_info["count"] = n + 1
+                    samples_info.setdefault("files", []).append(str(wav_path))
+                    registry.save(user_id, merged, samples_info, existing["threshold"])
+                    sample_count = n + 1
+                else:
+                    registry.save(user_id, embedding, {"count": 1, "files": [str(wav_path)]}, 0.60)
+                    sample_count = 1
             else:
-                registry.save(user_id, embedding, {"count": 1, "files": [str(wav_path)]}, 0.60)
-                sample_count = 1
+                existing = registry.get_devices(user_id).get(did)
+                if existing:
+                    old_emb = existing["embedding"]
+                    n = existing.get("samples", {}).get("count", 1)
+                    merged = [(old_emb[i] * n + embedding[i]) / (n + 1) for i in range(len(embedding))]
+                    samples_info = existing.get("samples", {})
+                    samples_info["count"] = n + 1
+                    samples_info.setdefault("files", []).append(str(wav_path))
+                    registry.save_device(user_id, did, merged, samples_info, existing.get("threshold", 0.60))
+                    sample_count = n + 1
+                else:
+                    registry.save_device(user_id, did, embedding, {"count": 1, "files": [str(wav_path)]}, 0.60)
+                    sample_count = 1
             return {
                 "user_id": user_id,
+                "device_id": did,
                 "sample_count": sample_count,
             }
         finally:
@@ -1462,104 +1682,27 @@ def create_app(config: AppConfig) -> FastAPI:
     async def meeting_process(
         audio: UploadFile | None = File(default=None),
         summarize: bool = Form(default=True),
+        max_speakers: int | None = Form(default=None),
     ) -> Dict[str, Any]:
         if audio is None:
             raise HTTPException(status_code=400, detail="audio file is required")
-        tmp_dir = Path(config.paths.artifacts_dir) / "tmp"
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        in_path = tmp_dir / f"meeting_{uuid.uuid4().hex}.webm"
-        wav_path = in_path.with_suffix(".wav")
-        try:
-            data = await audio.read()
-            in_path.write_bytes(data)
-            import subprocess
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", str(in_path), "-f", "wav", "-acodec", "pcm_s16le",
-                 "-ac", "1", "-ar", "16000", str(wav_path)],
-                capture_output=True, timeout=60,
+        task_id = uuid.uuid4().hex
+        meeting_tasks.create(task_id)
+        data = await audio.read()
+        asyncio.create_task(
+            _process_meeting_background(
+                config, bus, meeting_tasks, manager, intent_provider,
+                task_id, data, summarize, max_speakers,
             )
-            if not wav_path.exists():
-                raise RuntimeError("ffmpeg conversion failed")
-            samples, sr = read_wav(wav_path)
-            duration_s = len(samples) / sr
-            if duration_s < 1.0:
-                raise HTTPException(status_code=400, detail="Audio too short (<1s)")
-            segments = diarize(samples, sr)
-            registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite")
-            enrolled = {}
-            for uid in ["scott", "default"]:
-                rec = registry.get(uid)
-                if rec:
-                    enrolled[uid] = rec
-            if enrolled:
-                embedder = SpeakerEmbedder()
-                segments = identify_speakers(segments, enrolled, embedder, sr, samples)
-            full_transcript_parts = []
-            for seg in segments:
-                start_samp = int(seg["start"] * sr)
-                end_samp = int(seg["end"] * sr)
-                chunk = samples[start_samp:end_samp]
-                if len(chunk) < int(sr * 0.3):
-                    seg["transcript"] = ""
-                    continue
-                text = refine_transcript(chunk, sr, config.stt)
-                seg["transcript"] = text
-                name = seg.get("name", f"Speaker {seg['speaker'] + 1}")
-                full_transcript_parts.append(f"[{name}]: {text}")
-            summary = None
-            if summarize and full_transcript_parts:
-                meeting_text = "\n".join(full_transcript_parts)
-                prompt = (
-                    "Summarize this meeting transcript. Extract:\n"
-                    "- Key decisions made\n"
-                    "- Action items with owner if mentioned\n"
-                    "- Main discussion topics\n\n"
-                    f"Transcript:\n{meeting_text}"
-                )
-                try:
-                    if intent_provider:
-                        summary = intent_provider.complete(prompt).content.strip()
-                    else:
-                        summary = manager.pipeline.ralph.run(prompt)
-                except Exception:
-                    summary = None
-            meeting_id = uuid.uuid4().hex
-            full_transcript = "\n".join(full_transcript_parts)
-            graph_saved = False
-            graph_error = None
-            if config.neo4j.password:
-                try:
-                    from ..auth.neo4j_ingest import save_meeting_to_neo4j
-                    save_meeting_to_neo4j(
-                        config.neo4j.uri,
-                        config.neo4j.user,
-                        config.neo4j.password,
-                        meeting_id=meeting_id,
-                        transcript=full_transcript,
-                        segments=segments,
-                        duration_s=duration_s,
-                        num_speakers=len(set(s["speaker"] for s in segments if s["speaker"] >= 0)),
-                        summary=summary,
-                        database=config.neo4j.database,
-                    )
-                    graph_saved = True
-                except Exception as exc:
-                    graph_error = f"{type(exc).__name__}: {exc}"
-            return {
-                "ok": True,
-                "meeting_id": meeting_id,
-                "duration_s": round(duration_s, 1),
-                "num_speakers": len(set(s["speaker"] for s in segments if s["speaker"] >= 0)),
-                "segments": segments,
-                "transcript": full_transcript,
-                "summary": summary,
-                "graph_saved": graph_saved,
-                "graph_error": graph_error,
-            }
-        finally:
-            for p in [in_path, wav_path]:
-                if p.exists():
-                    p.unlink(missing_ok=True)
+        )
+        return {"ok": True, "task_id": task_id}
+
+    @app.get("/meeting/status/{task_id}")
+    async def meeting_status(task_id: str) -> Dict[str, Any]:
+        t = meeting_tasks.get(task_id)
+        if t is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return t
 
     @app.get("/meeting/history")
     async def meeting_history(limit: int = 20) -> Dict[str, Any]:
@@ -1630,19 +1773,23 @@ def create_app(config: AppConfig) -> FastAPI:
 
     @app.get("/voiceprints/status")
     async def voiceprints_status() -> Dict[str, Any]:
-        registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite")
+        from ..util.db import Database
         try:
-            from ..util.db import Database
             db = Database(Path(config.paths.artifacts_dir) / "results.sqlite")
             cur = db.conn.cursor()
             cur.execute("SELECT user_id, samples_json, threshold FROM voiceprints")
             users = []
             for row in cur.fetchall():
                 samples = json.loads(row[1])
+                uid = row[0]
+                dev_cur = db.conn.cursor()
+                dev_cur.execute("SELECT device_id FROM voiceprint_devices WHERE user_id=?", (uid,))
+                devices = [d[0] for d in dev_cur.fetchall()]
                 users.append({
-                    "user_id": row[0],
+                    "user_id": uid,
                     "sample_count": samples.get("count", 0),
                     "threshold": row[2],
+                    "devices": devices,
                 })
             return {"users": users, "count": len(users)}
         except Exception as exc:

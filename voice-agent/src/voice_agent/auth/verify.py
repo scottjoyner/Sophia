@@ -26,24 +26,38 @@ def verify_audio_segment(
     challenge_phrase = None
     if config.auth.require_challenge:
         challenge_phrase = random_phrase(config.auth.challenge_phrases_file)
-    record = registry.get(user_id)
-    if not record:
+
+    all_records = registry.get_all_for_user(user_id)
+    if not all_records:
         return {
             "session_id": session_id,
             "user_id": user_id,
             "score": 0.0,
             "accepted": False,
             "challenge": challenge_phrase,
+            "device_id": None,
             "ts_ms": now_ms(),
         }
-    embedding = embedder.embed(samples, sample_rate)
-    score = cosine_similarity(np.array(embedding, dtype=float), np.array(record["embedding"], dtype=float))
-    accepted = score >= record["threshold"]
+
+    embedding = np.array(embedder.embed(samples, sample_rate), dtype=float)
+    best_score = 0.0
+    best_record = all_records[0]
+    for record in all_records:
+        stored = np.array(record["embedding"], dtype=float).ravel()
+        if stored.shape != embedding.shape:
+            continue
+        score = cosine_similarity(embedding, stored)
+        if score > best_score:
+            best_score = score
+            best_record = record
+
+    accepted = best_score >= best_record["threshold"]
     return {
         "session_id": session_id,
         "user_id": user_id,
-        "score": score,
+        "score": best_score,
         "accepted": accepted,
         "challenge": challenge_phrase,
+        "device_id": best_record["device_id"],
         "ts_ms": now_ms(),
     }

@@ -1,6 +1,6 @@
 # Sophia Voice — Plan
 
-## Status: Live Voice Enrolled, UI Redesigned (2026-05-24)
+## Status: Meeting Mode + Dispatch Hub Live (2026-05-24)
 
 ---
 
@@ -38,6 +38,12 @@
 | `/auth/verify` | POST | Test audio against voiceprint |
 | `/voiceprints/enroll` | POST | Add audio sample to voiceprint |
 | `/voiceprints/train-neo4j` | POST | Train from Neo4j audio paths |
+| `/voiceprints/status` | GET | Enrolled speakers list |
+| `/meeting/process` | POST | Diarize + transcribe + summarize meeting audio |
+| `/meeting/history` | GET | List past meetings from Neo4j |
+| `/meeting/history/{id}` | GET | Get single meeting with segments |
+| `/dispatch/to-assistx` | POST | Send voice event to auto-assist |
+| `/dispatch/status` | GET | assistx connectivity check |
 | `/ws` | WS | Real-time audio streaming (STT → Auth → LLM → TTS) |
 
 ### Data
@@ -64,47 +70,50 @@
 - [x] Button variants, mobile-responsive layout
 - [x] Capture counter persisted in localStorage
 
-### Phase 3: Meeting Mode 🔜 (Next)
+### Phase 3: Meeting Mode ✅
 **Goal**: Process long-form multi-speaker audio (meetings, conversations) — diarize, transcribe, identify speakers, summarize.
 
-**Approach** (no pyannote — use SpeechBrain + sklearn):
-1. Sliding window over audio (1.5s / 0.5s overlap)
-2. Compute ECAPA-TDNN embedding per window
-3. Cluster embeddings with sklearn (AffinityPropagation or AgglomerativeClustering)
-4. Map clusters to time segments — produce speaker timeline
-5. Transcribe each speaker segment with faster-whisper
-6. Match clusters against enrolled voiceprints for name labels
-7. Run LLM over full transcript for:
-   - Action items
-   - Key decisions
-   - Requirements extraction
-   - Per-speaker summaries
-8. Save conversation to Neo4j memory graph
+**Approach**: SpeechBrain ECAPA-TDNN + Silero-VAD + sklearn clustering + faster-whisper per-segment.
 
-**UI**:
-- Mode toggle (Agent / Meeting) at top of page
-- Meeting mode: file upload + Process button
-- Results display: speaker timeline, per-speaker transcripts, action items
-- Download structured output (JSON)
+**Implementation**:
+- [x] `auth/diarization.py` — diarization module (Silero-VAD, ECAPA-TDNN, AgglomerativeClustering)
+- [x] `POST /meeting/process` — upload + diarize + transcribe + summarize + Neo4j save
+- [x] Three-mode toggle (Agent / Meeting / Dispatch) in UI
+- [x] Meeting results view (timeline, transcripts, summary, download)
+- [x] Speaker identification against enrolled voiceprints
+- [x] LLM summarization of meeting transcript
+- [x] Neo4j Meeting+MeetingSegment graph storage
+- [x] Meeting history browse (`GET /meeting/history`, `GET /meeting/history/{id}`)
+- [x] Per-segment transcript download button
 
-**Implementation plan**:
-- [ ] `auth/diarization.py` — diarization module (embed + cluster + segment)
-- [ ] `POST /meeting/process` — long-form audio endpoint
-- [ ] Mode toggle in UI
-- [ ] Meeting results view (timeline + transcripts)
-- [ ] Speaker identification against enrolled voiceprints
-- [ ] LLM summarization of meeting transcript
-- [ ] Neo4j conversation graph storage
+### Phase 4: Dispatch Mode ✅
+**Goal**: Bridge voice events to auto-assist for automated follow-up actions.
 
-### Phase 4: Multi-Microphone Robustness
-- [ ] Enroll voice from multiple devices/mics
-- [ ] Evaluate cross-mic verification accuracy
-- [ ] Optional: per-device voiceprint profiles
+**Implementation**:
+- [x] Dispatch Hub UI tab with send-to-assistx button
+- [x] `POST /dispatch/to-assistx` — HMAC-signed voice events to assistx server
+- [x] `GET /dispatch/status` — assistx connectivity check
+- [x] Auto-dispatch toggle (localStorage persistence)
+- [x] Dispatch voice_auth events on verify, meeting_transcript events on summarize
 
-### Phase 5: Real-World Testing
+### Phase 5: Async & Progress
+- [ ] Background task processing for long meetings (return task ID, poll for result)
+- [ ] WebSocket progress events during meeting processing (VAD → embed → cluster → transcribe → summarize)
+- [ ] Live diarization over WebSocket (real-time speaker tracking)
+
+### Phase 6: Multi-Microphone Robustness ✅ / 🔜
+- [x] `voiceprint_devices` SQLite table (per-device embeddings)
+- [x] Enroll with device_id parameter (stores device-specific voiceprint)
+- [x] Verify iterates all device entries, returns best match + device_id
+- [x] UI: device label input, matched device in auth result, devices in speaker list
+- [ ] Evaluate cross-mic verification accuracy (known gap)
+- [ ] Optional: UI for listing/managing/deleting per-device voiceprints
+
+### Phase 7: Real-World Testing
 - [ ] End-to-end WebSocket session with live auth
 - [ ] Meeting mode with actual multi-speaker audio
 - [ ] TTS quality evaluation with live voice reference
+- [ ] Test dispatch hub with real assistx instance
 
 ---
 

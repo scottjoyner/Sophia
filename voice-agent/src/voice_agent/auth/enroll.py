@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 
@@ -11,7 +11,9 @@ from .registry import VoiceprintRegistry
 from .speaker_embedder import SpeakerEmbedder
 
 
-def enroll_from_files(config: AppConfig, user_id: str, files: List[str]) -> None:
+def enroll_from_files(
+    config: AppConfig, user_id: str, files: List[str], device_id: Optional[str] = None
+) -> None:
     registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite")
     embedder = SpeakerEmbedder()
     embeddings = []
@@ -22,4 +24,7 @@ def enroll_from_files(config: AppConfig, user_id: str, files: List[str]) -> None
         embeddings.append(embedding)
         samples_meta.append({"path": path, "sample_rate": sr})
     embedding_mean = np.mean(np.array(embeddings, dtype=float), axis=0).tolist()
-    registry.save(user_id, embedding_mean, {"samples": samples_meta}, config.auth.threshold)
+    if device_id:
+        registry.save_device(user_id, device_id, embedding_mean, {"samples": samples_meta}, config.auth.threshold)
+    else:
+        registry.save(user_id, embedding_mean, {"samples": samples_meta}, config.auth.threshold)
