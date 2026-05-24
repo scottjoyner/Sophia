@@ -29,5 +29,5 @@ vad:
   aggressiveness: 2
   energy_threshold: 0.005
 auth:
-  threshold: 0.1
+  threshold: 0.60
   require_challenge: false

@@ -51,6 +51,10 @@ class LLMConfig(BaseModel):
 class TTSConfig(BaseModel):
     backend: str = "fallback"
     voice: Optional[str] = None
+    openvoice_model_path: Optional[str] = None
+    coqui_model_name: str = "tts_models/multilingual/multi-dataset/xtts_v2"
+    speaker_wav: Optional[str] = None
+    use_gpu: bool = False
 
 
 class PathsConfig(BaseModel):

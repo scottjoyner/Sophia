@@ -14,6 +14,8 @@ from ..stt.faster_whisper_stream import StreamingTranscriber
 from ..tts.base import TextToSpeech
 from ..tts.piper_tts import PiperTTS
 from ..tts.pyttsx3_fallback import FallbackTTS
+from ..tts.openvoice_tts import OpenVoiceTTS
+from ..tts.coqui_tts import CoquiTTS
 from ..util.audio import write_wav
 from ..util.db import Database
 from ..util.logging import JsonlLogger
@@ -38,6 +40,16 @@ class PipelineManager:
         if self.config.tts.backend == "piper":
             try:
                 return PiperTTS(self.config)
+            except Exception:
+                return FallbackTTS(self.config)
+        if self.config.tts.backend == "openvoice":
+            try:
+                return OpenVoiceTTS(self.config)
+            except Exception:
+                return FallbackTTS(self.config)
+        if self.config.tts.backend == "coqui":
+            try:
+                return CoquiTTS(self.config)
             except Exception:
                 return FallbackTTS(self.config)
         return FallbackTTS(self.config)

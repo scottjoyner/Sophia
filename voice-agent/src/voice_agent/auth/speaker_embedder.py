@@ -22,6 +22,12 @@ class SpeakerEmbedder:
             return [mean, std, energy]
         import torch
 
+        target_sr = 16000
+        if sample_rate != target_sr:
+            from scipy import signal
+            samples = signal.resample_poly(samples, target_sr, sample_rate)
+            sample_rate = target_sr
+
         tensor = torch.tensor(samples).unsqueeze(0)
         embedding = self.model.encode_batch(tensor).squeeze().cpu().numpy()
         return embedding.tolist()

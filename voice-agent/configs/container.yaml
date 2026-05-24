@@ -22,8 +22,14 @@ stt:
 vad:
   aggressiveness: 2
   energy_threshold: 0.005
+tts:
+  backend: openvoice
+  speaker_wav: /data/voice-insight/reference_scott.wav
+  openvoice_model_path: /models/openvoice
+  coqui_model_name: tts_models/multilingual/multi-dataset/xtts_v2
+  use_gpu: false
 auth:
-  threshold: 0.1
+  threshold: 0.60
   require_challenge: false
 neo4j:
   uri: bolt://host.docker.internal:7687

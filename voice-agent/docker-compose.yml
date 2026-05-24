@@ -17,6 +17,8 @@ services:
       SOPHIA_INTENT_BASE_URL: ${SOPHIA_INTENT_BASE_URL:-}
       SOPHIA_INTENT_API_KEY: ${SOPHIA_INTENT_API_KEY:-}
       SOPHIA_INTENT_MODEL: ${SOPHIA_INTENT_MODEL:-draft-model}
+      TORCH_HUB_TRUSTED_REPOS: snakers4/silero-vad
+      COQUI_TOS_AGREED: "1"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

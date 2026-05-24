@@ -11,6 +11,8 @@ from typing import Any, Dict, Iterable, List
 import numpy as np
 import yaml
 
+from scipy import signal as scipy_signal
+
 from voice_agent.auth.speaker_embedder import SpeakerEmbedder
 from voice_agent.util.audio import read_wav, write_wav
 
@@ -185,8 +187,12 @@ def _legacy_training_candidate_rows(config: Dict[str, Any], identity: str, limit
     query = """
     UNWIND $seed_pairs AS seed
     MATCH (tx:Transcription {key: seed.key})-[:HAS_SEGMENT]->(seg:Segment)
-    OPTIONAL MATCH (seg)-[:SPOKEN_BY]->(sp:Speaker)
-    WITH seed, tx, seg, sp, coalesce(sp.label, seg.speaker_label, 'UNKNOWN') AS label
+    WITH seed, tx, seg,
+         coalesce(
+           [(seg)-[:SPOKEN_BY]->(sp:Speaker) | sp.label][0],
+           seg.speaker_label,
+           'UNKNOWN'
+         ) AS label
     WHERE label = seed.label
       AND seg.start IS NOT NULL
       AND seg.end IS NOT NULL
@@ -195,12 +201,12 @@ def _legacy_training_candidate_rows(config: Dict[str, Any], identity: str, limit
       AND seg.text IS NOT NULL
       AND size(trim(seg.text)) >= $min_text_chars
       AND NOT trim(seg.text) STARTS WITH 'I-104'
-    RETURN tx.key AS recording_key,
+    RETURN DISTINCT seg.id AS legacy_segment_id,
+           tx.key AS recording_key,
            coalesce(tx.source_media, tx.source_media_prev) AS source_media,
-           sp.key AS speaker_key,
+           seed.key AS speaker_key,
            label AS speaker_label,
            seed.confidence AS seed_confidence,
-           seg.id AS legacy_segment_id,
            seg.start AS start,
            seg.end AS end,
            seg.text AS text
@@ -300,7 +306,8 @@ def export_training_clips(config: Dict[str, Any], identity: str, limit: int, man
             end = min(len(audio), int(float(row["end"]) * sr))
             if end <= start:
                 raise ValueError("segment has no audio samples after clipping")
-            write_wav(Path(container_path), audio[start:end], sr)
+            segment = audio[start:end]
+            write_wav(Path(container_path), segment, sr)
             enriched["status"] = "exported"
         except Exception as exc:
             enriched["status"] = "error"

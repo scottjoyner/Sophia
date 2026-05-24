@@ -7,8 +7,8 @@ neo4j:
 voice_insight:
   namespace: sophia_voice_insight_v1
   default_identity: scott
-  accepted_threshold: 0.75
-  candidate_threshold: 0.62
+  accepted_threshold: 0.60
+  candidate_threshold: 0.40
   models:
     speaker_embedding: speechbrain/spkrec-ecapa-voxceleb
     diarization: pyannote/speaker-diarization-3.1
@@ -24,11 +24,13 @@ voice_insight:
         to: /nas-fileserver
       - from: /mnt/S/sophia-ingest
         to: /ssd-ingest
+      - from: /nas/fileserver
+        to: /nas-fileserver
   training:
     min_segment_seconds: 2.0
     max_segment_seconds: 18.0
     min_text_chars: 16
-    max_samples_per_run: 100
+    max_samples_per_run: 5000
     clone_dataset:
       min_segment_seconds: 3.0
       max_segment_seconds: 14.0
@@ -37,9 +39,117 @@ voice_insight:
       max_samples_per_recording: 40
   legacy:
     speaker_seeds:
-      # Add high-confidence legacy clusters here after reviewing the report.
+      # Historical (2000-era) seeds
       - identity: scott
         key: "2000_1127_220512"
         label: "SPEAKER_00"
         confidence: 0.90
-        note: "Initial self-talk seed; verify exported clips before broad promotion."
+        note: "Primary self-talk seed; SPEAKER_00 dominates at 43.9s of 89s total"
+      - identity: scott
+        key: "2001_1127_231337"
+        label: "SPEAKER_00"
+        confidence: 0.85
+        note: "SPEAKER_00 has 32.2s (dominant label in this recording)"
+      - identity: scott
+        key: "2002_1130_140921"
+        label: "SPEAKER_00"
+        confidence: 0.80
+        note: "SPEAKER_00 has 14.7s; mixed with SPEAKER_01/02"
+      - identity: scott
+        key: "2001_1130_192125"
+        label: "SPEAKER_00"
+        confidence: 0.80
+        note: "SPEAKER_00 has 10.5s"
+      - identity: scott
+        key: "2001_1127_202116"
+        label: "SPEAKER_00"
+        confidence: 0.80
+        note: "SPEAKER_00 has 8.9s"
+      # 2024 seeds – diverse months that exist in Neo4j as WAV
+      - identity: scott
+        key: "2024_1226_093824"
+        label: "SPEAKER_00"
+        confidence: 0.90
+        note: "2024 Dec, 128.7s SPEAKER_00"
+      - identity: scott
+        key: "2024_0819_211636"
+        label: "SPEAKER_00"
+        confidence: 0.90
+        note: "2024 Aug, 117.7s SPEAKER_00"
+      - identity: scott
+        key: "2024_0130_055134"
+        label: "SPEAKER_00"
+        confidence: 0.90
+        note: "2024 Jan, 89.9s SPEAKER_00"
+      # 2025 seeds – diverse months
+      - identity: scott
+        key: "2025_0812_223324"
+        label: "SPEAKER_00"
+        confidence: 0.95
+        note: "2025 Aug, 816.5s SPEAKER_00 – very high confidence"
+      - identity: scott
+        key: "2025_1211_143605"
+        label: "SPEAKER_00"
+        confidence: 0.95
+        note: "2025 Dec, 632.6s SPEAKER_00"
+      - identity: scott
+        key: "2025_0822_230349"
+        label: "SPEAKER_00"
+        confidence: 0.95
+        note: "2025 Aug, 559.9s SPEAKER_00"
+      - identity: scott
+        key: "2025_0304_062220"
+        label: "SPEAKER_00"
+        confidence: 0.95
+        note: "2025 Mar, 337.7s SPEAKER_00"
+      - identity: scott
+        key: "2025_1008_223453"
+        label: "SPEAKER_00"
+        confidence: 0.95
+        note: "2025 Oct, 340.7s SPEAKER_00"
+      - identity: scott
+        key: "2025_1111_230802"
+        label: "SPEAKER_00"
+        confidence: 0.95
+        note: "2025 Nov, 339.4s SPEAKER_00"
+      - identity: scott
+        key: "2025_1207_014050"
+        label: "SPEAKER_00"
+        confidence: 0.95
+        note: "2025 Dec, 337.7s SPEAKER_00"
+      - identity: scott
+        key: "2025_0101_091242"
+        label: "SPEAKER_00"
+        confidence: 0.95
+        note: "2025 Jan, 186.7s SPEAKER_00"
+      # 2026 seeds
+      - identity: scott
+        key: "2026_0514_130049"
+        label: "SPEAKER_00"
+        confidence: 0.95
+        note: "2026 May, 1224.0s SPEAKER_00 – best recording available"
+      - identity: scott
+        key: "2026_0514_180112"
+        label: "SPEAKER_00"
+        confidence: 0.95
+        note: "2026 May, 483.3s SPEAKER_00"
+      - identity: scott
+        key: "2026_0427_142656"
+        label: "SPEAKER_00"
+        confidence: 0.95
+        note: "2026 Apr, 339.7s SPEAKER_00"
+      - identity: scott
+        key: "2026_0113_164624"
+        label: "SPEAKER_00"
+        confidence: 0.95
+        note: "2026 Jan, 337.7s SPEAKER_00"
+      - identity: scott
+        key: "2026_0210_150000"
+        label: "SPEAKER_00"
+        confidence: 0.95
+        note: "2026 Feb, 337.7s SPEAKER_00"
+      - identity: scott
+        key: "2026_0331_224623"
+        label: "SPEAKER_00"
+        confidence: 0.95
+        note: "2026 Mar, 284.7s SPEAKER_00"

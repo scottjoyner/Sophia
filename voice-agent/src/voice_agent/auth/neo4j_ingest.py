@@ -156,3 +156,85 @@ def save_capture_to_neo4j(
             intent_source=str(context.get("intent_source") or ""),
         )
     driver.close()
+
+
+def save_meeting_to_neo4j(
+    uri: str,
+    user: str,
+    password: str,
+    *,
+    meeting_id: str,
+    transcript: str,
+    segments: list[dict],
+    duration_s: float,
+    num_speakers: int,
+    summary: str | None = None,
+    database: str | None = None,
+) -> dict:
+    try:
+        from neo4j import GraphDatabase
+    except ImportError as exc:
+        raise RuntimeError("neo4j driver not installed") from exc
+
+    driver = GraphDatabase.driver(uri, auth=(user, password))
+    segment_nodes = []
+    with driver.session(database=database) as session:
+        for i, seg in enumerate(segments):
+            seg_id = f"{meeting_id}_seg_{i}"
+            speaker_label = seg.get("name", f"Speaker {seg.get('speaker', 0) + 1}")
+            session.run(
+                """
+                MERGE (seg:MeetingSegment {id: $seg_id})
+                SET seg.start_s = $start,
+                    seg.end_s = $end,
+                    seg.speaker = $speaker_label,
+                    seg.speaker_idx = $speaker_idx,
+                    seg.transcript = $transcript,
+                    seg.confidence = $confidence,
+                    seg.meeting_id = $meeting_id,
+                    seg.segment_idx = $i,
+                    seg.created_at = datetime()
+                """,
+                seg_id=seg_id,
+                start=float(seg["start"]),
+                end=float(seg["end"]),
+                speaker_label=speaker_label,
+                speaker_idx=int(seg.get("speaker", 0)),
+                transcript=seg.get("transcript", ""),
+                confidence=float(seg.get("confidence", 0)),
+                meeting_id=meeting_id,
+                i=i,
+            )
+            segment_nodes.append(seg_id)
+
+        result = session.run(
+            """
+            MERGE (m:Meeting {id: $meeting_id})
+            SET m.duration_s = $duration_s,
+                m.num_speakers = $num_speakers,
+                m.transcript = $transcript,
+                m.summary = $summary,
+                m.created_at = datetime()
+            RETURN m
+            """,
+            meeting_id=meeting_id,
+            duration_s=duration_s,
+            num_speakers=num_speakers,
+            transcript=transcript,
+            summary=summary or "",
+        )
+        meeting_node = result.single()
+
+        for seg_id in segment_nodes:
+            session.run(
+                """
+                MATCH (m:Meeting {id: $meeting_id})
+                MATCH (seg:MeetingSegment {id: $seg_id})
+                MERGE (m)-[:HAS_SEGMENT]->(seg)
+                """,
+                meeting_id=meeting_id,
+                seg_id=seg_id,
+            )
+
+    driver.close()
+    return {"meeting_id": meeting_id, "segment_count": len(segment_nodes)}

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
@@ -11,10 +12,15 @@ from pydantic import BaseModel
 
 from ..auth.enroll import enroll_from_files
 from ..auth.neo4j_ingest import collect_audio_paths_from_neo4j, save_capture_to_neo4j
+from ..auth.diarization import diarize, identify_speakers
+from ..auth.verify import verify_audio_segment
+from ..auth.registry import VoiceprintRegistry
+from ..auth.speaker_embedder import SpeakerEmbedder
 from ..config import AppConfig, load_config
 from ..llm.intent import detect_voice_intent, intent_from_model_payload
 from ..llm.openai_compat_provider import OpenAICompatProvider
-from ..util.audio import b64decode
+from ..stt.faster_whisper_batch import refine_transcript
+from ..util.audio import b64decode, read_wav
 from ..util.time import now_ms
 from .events import EventBus, event_to_dict
 from .protocols import build_protocol_adapter
@@ -42,97 +48,284 @@ class Neo4jEnrollRequest(BaseModel):
     limit: int = 200
 
 
+class DispatchRequest(BaseModel):
+    event_type: str = "voice_auth"
+    text: str = ""
+    metadata: Dict[str, Any] = {}
+    auto_dispatch: bool = True
+    target_url: str = "http://host.docker.internal:8000"
+    target_token: str = ""
+    session_id: str | None = "mobile"
+
+
 CAPTURE_PAGE = """<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Sophia Capture</title>
+  <title>Sophia Voice</title>
   <style>
     :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; background: #0b0f14; color: #f4f7fb; }
     main { width: min(100%, 760px); margin: 0 auto; padding: max(18px, env(safe-area-inset-top)) 16px 28px; }
-    header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 18px; }
-    h1 { margin: 0; font-size: clamp(30px, 10vw, 54px); line-height: .92; letter-spacing: 0; }
-    .sub { color: #9aa7b6; margin-top: 8px; font-size: 15px; }
-    .pill { border: 1px solid #2e3947; border-radius: 999px; padding: 8px 10px; color: #a8ffcb; background: #102018; font-size: 12px; white-space: nowrap; }
-    section { border: 1px solid #253140; border-radius: 8px; padding: 14px; background: #111821; margin: 12px 0; }
-    label { display: block; color: #adbac8; font-size: 13px; margin: 0 0 7px; }
-    input, textarea { width: 100%; border: 1px solid #334155; border-radius: 8px; background: #071019; color: #f8fafc; padding: 12px; font: inherit; }
-    textarea { min-height: 190px; resize: vertical; line-height: 1.45; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+    .logo h1 { margin: 0; font-size: 28px; letter-spacing: -.02em; }
+    .status-bar { display: flex; gap: 8px; flex-wrap: wrap; }
+    .pill { border-radius: 999px; padding: 6px 12px; font-size: 12px; white-space: nowrap; border: 1px solid #2e3947; background: #111821; color: #9aa7b6; }
+    .pill.graph { color: #a8ffcb; background: #102018; }
+    .pill.auth { min-width: 110px; text-align: center; transition: all .3s; }
+    .pill.auth.pass { border-color: #34d399; background: #0a2a1a; color: #6ee7b7; }
+    .pill.auth.fail { border-color: #fb7185; background: #2a0a14; color: #fda4af; }
+    .pill.auth.enrolling { border-color: #fbbf24; background: #1f1a0a; color: #fcd34d; }
+    .pill.auth.idle { border-color: #555; color: #9aa7b6; }
+    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+    .badge.pass { background: #0a2a1a; color: #6ee7b7; }
+    .badge.fail { background: #2a0a14; color: #fda4af; }
+    section { border: 1px solid #253140; border-radius: 10px; padding: 16px; background: #111821; margin: 12px 0; }
+    section.auth-section { border-color: #2e3947; }
+    section.capture-section { border-color: #253140; }
+    h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; color: #cbd5e1; display: flex; align-items: center; gap: 8px; }
+    h2 .sub { color: #64748b; font-weight: 400; font-size: 13px; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
-    button { border: 0; border-radius: 8px; padding: 14px 12px; font: inherit; font-weight: 700; color: #061014; background: #7dd3fc; min-height: 52px; }
-    button.secondary { background: #253140; color: #e5edf7; }
+    label { display: block; color: #94a3b8; font-size: 12px; margin-bottom: 6px; font-weight: 500; }
+    input, textarea { width: 100%; border: 1px solid #334155; border-radius: 8px; background: #071019; color: #f8fafc; padding: 10px 12px; font: inherit; font-size: 14px; }
+    input:focus, textarea:focus { outline: none; border-color: #7dd3fc; }
+    textarea { min-height: 100px; resize: vertical; line-height: 1.45; }
+    .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+    .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+    button { border: 0; border-radius: 8px; padding: 12px 16px; font: inherit; font-weight: 600; font-size: 14px; cursor: pointer; min-height: 48px; flex: 1; transition: opacity .15s, background .15s; }
+    button:disabled { opacity: .35; cursor: default; }
+    button.primary { background: #7dd3fc; color: #061014; }
+    button.primary:hover:not(:disabled) { background: #67c5f0; }
     button.danger { background: #fb7185; color: #23060a; }
-    button:disabled { opacity: .45; }
+    button.danger:hover:not(:disabled) { background: #f05e73; }
+    button.secondary { background: #1e293b; color: #e2e8f0; }
+    button.secondary:hover:not(:disabled) { background: #29394f; }
+    button.success { background: #34d399; color: #052e16; }
+    button.success:hover:not(:disabled) { background: #2bc48a; }
+    button.warning { background: #fbbf24; color: #1c1900; }
+    button.warning:hover:not(:disabled) { background: #f0b51c; }
+    .auth-result { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 8px; margin-top: 12px; background: #0f172a; min-height: 52px; }
+    .auth-result.hidden { display: none; }
+    .auth-score { font-size: 28px; font-weight: 700; letter-spacing: -.02em; }
+    .auth-score.pass { color: #34d399; }
+    .auth-score.fail { color: #fb7185; }
+    .auth-label { font-size: 13px; color: #94a3b8; }
+    .auth-accepted { font-size: 14px; font-weight: 600; }
+    .enroll-count { font-size: 12px; color: #64748b; margin-left: auto; }
     .fallback { display: none; margin-top: 12px; }
     .fallback.active { display: block; }
-    .status { min-height: 22px; color: #9aa7b6; font-size: 14px; margin-top: 10px; }
-    .meter { height: 10px; border-radius: 999px; background: #1f2937; overflow: hidden; margin-top: 10px; }
-    .meter > div { height: 100%; width: 0%; background: #34d399; transition: width .12s linear; }
-    audio { width: 100%; margin-top: 12px; }
-    pre { overflow: auto; max-height: 220px; background: #071019; border: 1px solid #253140; border-radius: 8px; padding: 10px; color: #cbd5e1; }
-    @media (max-width: 520px) { .row, .controls { grid-template-columns: 1fr; } header { display: block; } .pill { display: inline-block; margin-top: 12px; } }
+    .status { min-height: 20px; color: #94a3b8; font-size: 13px; margin-top: 8px; transition: color .2s; }
+    .meter { height: 8px; border-radius: 999px; background: #1e293b; overflow: hidden; margin-top: 10px; }
+    .meter > div { height: 100%; width: 0%; background: linear-gradient(90deg, #34d399, #7dd3fc); transition: width .12s linear; }
+    audio { width: 100%; margin-top: 10px; border-radius: 6px; }
+    pre { overflow: auto; max-height: 180px; background: #071019; border: 1px solid #1e293b; border-radius: 8px; padding: 10px; color: #94a3b8; font-size: 12px; margin: 0; }
+    .inline-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; color: #64748b; }
+    .mode-toggle { display: flex; gap: 0; margin-bottom: 16px; border: 1px solid #2e3947; border-radius: 10px; overflow: hidden; background: #111821; }
+    .mode-btn { flex: 1; border: 0; border-radius: 0; padding: 10px 16px; font: inherit; font-weight: 600; font-size: 13px; cursor: pointer; background: transparent; color: #64748b; transition: all .15s; min-height: auto; }
+    .mode-btn.active { background: #1e293b; color: #e2e8f0; }
+    .mode-btn:hover:not(.active) { background: #1a2330; color: #94a3b8; }
+    .meeting-segment { padding: 8px 10px; border-left: 3px solid #7dd3fc; margin: 6px 0; background: #0f172a; border-radius: 0 6px 6px 0; font-size: 13px; line-height: 1.45; }
+    .meeting-segment .speaker-label { font-weight: 600; color: #7dd3fc; font-size: 12px; margin-bottom: 2px; }
+    .meeting-segment .seg-time { color: #64748b; font-size: 11px; margin-left: 8px; }
+    .dispatch-entry { padding: 6px 8px; border-left: 3px solid #555; margin: 4px 0; background: #0f172a; border-radius: 0 4px 4px 0; font-size: 12px; line-height: 1.4; }
+    .dispatch-entry.sent { border-left-color: #34d399; }
+    .dispatch-entry.failed { border-left-color: #fb7185; }
+    .dispatch-entry .de-type { font-weight: 600; color: #7dd3fc; font-size: 11px; }
+    .dispatch-entry .de-time { color: #64748b; font-size: 10px; margin-left: 8px; }
+    .dispatch-entry .de-status { font-size: 11px; }
+    .dispatch-entry .de-error { color: #fb7185; font-size: 11px; }
+    select { width: 100%; border: 1px solid #334155; border-radius: 8px; background: #071019; color: #f8fafc; padding: 10px 12px; font: inherit; font-size: 14px; }
+    @media (max-width: 520px) { .row { grid-template-columns: 1fr; } .controls { grid-template-columns: 1fr; } .btn-group { flex-direction: column; } button { width: 100%; } header { flex-direction: column; align-items: stretch; } }
   </style>
 </head>
 <body>
 <main>
   <header>
-    <div>
+    <div class="logo">
       <h1>Sophia</h1>
-      <div class="sub">Mobile recorder, transcript capture, and memory graph ingest.</div>
     </div>
-    <div id="graph" class="pill">checking graph...</div>
+    <div class="status-bar">
+      <div id="graph" class="pill graph">graph ...</div>
+      <div id="authStatus" class="pill auth idle">voice: idle</div>
+    </div>
   </header>
 
-  <section>
+  <div class="mode-toggle">
+    <button id="agentModeBtn" class="mode-btn active">&#x1F916; Agent</button>
+    <button id="meetingModeBtn" class="mode-btn">&#x1F91D; Meeting</button>
+    <button id="dispatchModeBtn" class="mode-btn">&#x1F4E4; Dispatch</button>
+  </div>
+
+  <div id="agentMode">
+  <section class="auth-section">
+    <h2>&#x1F3A4; Voice Authentication <span class="sub">enroll &amp; verify</span></h2>
     <div class="row">
       <div>
-        <label for="userId">Speaker / user id</label>
+        <label for="userId">Speaker</label>
         <input id="userId" value="scott" autocomplete="username">
       </div>
       <div>
-        <label for="sessionId">Session id</label>
+        <label for="sessionId">Session</label>
         <input id="sessionId" value="mobile">
       </div>
     </div>
-    <div class="controls">
-      <button id="startBtn">Start recording</button>
-      <button id="stopBtn" class="danger" disabled>Stop</button>
+    <div class="btn-group">
+      <button id="startBtn" class="primary">&#x23FA; Record</button>
+      <button id="stopBtn" class="danger" disabled>&#x25A0; Stop</button>
     </div>
     <div id="fallback" class="fallback">
-      <label for="audioFile">Safari upload / record fallback</label>
+      <label for="audioFile">Upload audio file</label>
       <input id="audioFile" type="file" accept="audio/*,video/*" capture>
     </div>
     <div class="meter"><div id="level"></div></div>
-    <div id="status" class="status">Ready.</div>
+    <div id="status" class="status">Tap Record, then speak naturally.</div>
     <audio id="preview" controls hidden></audio>
+    <div id="authResult" class="auth-result hidden">
+      <div>
+        <div class="auth-label">Voice Match</div>
+        <div class="auth-score" id="authScore">--%</div>
+      </div>
+      <div>
+        <div class="auth-label">Status</div>
+        <div id="authAccepted" class="auth-accepted">--</div>
+      </div>
+      <div id="enrollCount" class="enroll-count"></div>
+    </div>
+    <div class="btn-group">
+      <button id="verifyBtn" class="secondary" disabled>&#x1F50D; Verify Voice</button>
+      <button id="enrollBtn" class="warning" disabled>&#x2B06; Enroll Voice</button>
+      <button id="dispatchAuthBtn" class="primary" disabled style="flex:0.6;">&#x1F4E4; Dispatch</button>
+    </div>
   </section>
 
-  <section>
+  <section class="capture-section">
+    <h2>&#x1F4DD; Capture &amp; Save</h2>
     <label for="transcript">Transcript</label>
-    <textarea id="transcript" placeholder="Speak into your phone, or type here if browser transcription is unavailable."></textarea>
+    <textarea id="transcript" placeholder="Speak or type what was said."></textarea>
     <label for="activityContext">Context</label>
-    <input id="activityContext" placeholder="Optional: what are you doing, where are you, why capture this?">
-    <div class="controls">
-      <button id="saveBtn" disabled>Save capture</button>
-      <button id="clearBtn" class="secondary">Clear</button>
+    <input id="activityContext" placeholder="Where / what / why?">
+    <div class="btn-group">
+      <button id="saveBtn" class="success" disabled>&#x1F4BE; Save</button>
+      <button id="clearBtn" class="secondary">&#x1F5D1; Clear</button>
     </div>
     <div id="saveStatus" class="status"></div>
+    <div class="inline-meta">
+      <span id="captureCount">no captures saved</span>
+    </div>
   </section>
 
   <section>
-    <label>Latest capture</label>
+    <h2>&#x1F4CB; Latest Response</h2>
     <pre id="latest">{}</pre>
   </section>
+  <section>
+    <h2>&#x1F464; Enrolled Speakers</h2>
+    <div id="speakerList"><span class="status">Loading speakers...</span></div>
+    <div class="inline-meta" style="margin-top:6px;">
+      <button id="refreshSpeakersBtn" class="secondary" style="flex:0;padding:4px 10px;min-height:auto;font-size:11px;">&#x21BB; Refresh</button>
+    </div>
+  </section>
+  </div>
+
+  <div id="meetingMode" style="display:none;">
+  <section>
+    <h2>&#x1F91D; Meeting Mode <span class="sub">diarize, transcribe &amp; summarize</span></h2>
+    <label for="meetingFile">Upload meeting audio</label>
+    <input id="meetingFile" type="file" accept="audio/*,video/*">
+    <div class="btn-group" style="margin-top:10px;">
+      <button id="processMeetingBtn" class="warning" disabled>&#x2699; Process Meeting</button>
+    </div>
+    <div class="meter"><div id="meetingProgress"></div></div>
+    <div id="meetingStatus" class="status">Upload an audio file to process.</div>
+  </section>
+  <section id="meetingResults" style="display:none;">
+    <h2>&#x1F4CA; Results</h2>
+    <div id="meetingMeta" class="inline-meta"></div>
+    <div id="meetingTranscript" style="margin-top:12px;"></div>
+    <div id="meetingSummary" style="margin-top:12px;display:none;">
+      <h3>&#x1F4DD; Summary</h3>
+      <pre id="summaryText" style="max-height:400px;"></pre>
+    </div>
+    <div class="btn-group" style="margin-top:10px;">
+      <button id="dispatchMeetingBtn" class="primary">&#x1F4E4; Dispatch to AssistX</button>
+      <button id="downloadTranscriptBtn" class="secondary">&#x1F4E5; Download</button>
+    </div>
+  </section>
+  <section id="meetingHistory">
+    <h2>&#x1F4C2; Past Meetings</h2>
+    <div id="meetingHistoryList" style="max-height:300px;overflow-y:auto;"></div>
+    <div id="meetingHistoryStatus" class="status">Loading history...</div>
+  </section>
+  </div>
+
+  <div id="dispatchMode" style="display:none;">
+  <section>
+    <h2>&#x1F4E4; Auto-Assist Bridge <span class="sub">dispatch voice events to assistx</span></h2>
+    <div class="status-bar" id="dispatchStatusBar">
+      <div id="assistxPill" class="pill" style="border-color:#555;color:#9aa7b6;">assistx: checking...</div>
+      <div id="autoDispatchPill" class="pill" style="border-color:#555;color:#9aa7b6;display:none;">auto: off</div>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <div>
+        <label for="dispatchUrl">AssistX URL</label>
+        <input id="dispatchUrl" value="http://host.docker.internal:8000">
+      </div>
+      <div>
+        <label for="dispatchToken">Webhook Secret</label>
+        <input id="dispatchToken" type="password" placeholder="optional">
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:8px;">
+      <input id="autoDispatchToggle" type="checkbox" style="width:auto;">
+      <label for="autoDispatchToggle" style="margin:0;font-size:13px;cursor:pointer;">Auto-dispatch voice events to AssistX</label>
+      <button id="saveDispatchConfigBtn" class="secondary" style="flex:0;padding:6px 12px;min-height:auto;font-size:12px;">Save Config</button>
+    </div>
+  </section>
+  <section>
+    <h2>&#x1F514; Dispatch Event</h2>
+    <div class="row">
+      <div>
+        <label for="dispatchEventType">Event Type</label>
+        <select id="dispatchEventType">
+          <option value="voice_auth">voice_auth</option>
+          <option value="meeting_transcript">meeting_transcript</option>
+          <option value="ralph_iteration">ralph_iteration</option>
+          <option value="tts_chunk">tts_chunk</option>
+          <option value="barge_in">barge_in</option>
+          <option value="task_created">task_created</option>
+        </select>
+      </div>
+      <div>
+        <label for="dispatchAuto">Auto Dispatch</label>
+        <select id="dispatchAuto">
+          <option value="true">Yes</option>
+          <option value="false">No</option>
+        </select>
+      </div>
+    </div>
+    <label for="dispatchText">Event Text</label>
+    <textarea id="dispatchText" placeholder="Enter text payload to dispatch to assistx..." style="min-height:60px;"></textarea>
+    <label for="dispatchMeta">Metadata (JSON)</label>
+    <input id="dispatchMeta" placeholder='{"source":"sophia","confidence":0.95}'>
+    <div class="btn-group" style="margin-top:10px;">
+      <button id="dispatchSendBtn" class="primary">&#x1F4E4; Send to AssistX</button>
+    </div>
+  </section>
+  <section id="dispatchLogSection">
+    <h2>&#x1F4CB; Dispatch Log</h2>
+    <div id="dispatchLog" style="max-height:300px;overflow-y:auto;"></div>
+  </section>
+  </div>
 </main>
 <script>
 (() => {
   const startBtn = document.getElementById('startBtn');
   const stopBtn = document.getElementById('stopBtn');
   const saveBtn = document.getElementById('saveBtn');
+  const verifyBtn = document.getElementById('verifyBtn');
+  const enrollBtn = document.getElementById('enrollBtn');
   const clearBtn = document.getElementById('clearBtn');
   const statusEl = document.getElementById('status');
   const saveStatus = document.getElementById('saveStatus');
@@ -141,15 +334,58 @@ CAPTURE_PAGE = """<!doctype html>
   const levelEl = document.getElementById('level');
   const latest = document.getElementById('latest');
   const graph = document.getElementById('graph');
+  const authStatus = document.getElementById('authStatus');
+  const authResult = document.getElementById('authResult');
+  const authScore = document.getElementById('authScore');
+  const authAccepted = document.getElementById('authAccepted');
+  const enrollCount = document.getElementById('enrollCount');
+  const captureCount = document.getElementById('captureCount');
   const userId = document.getElementById('userId');
   const sessionId = document.getElementById('sessionId');
   const activityContext = document.getElementById('activityContext');
   const fallback = document.getElementById('fallback');
   const audioFile = document.getElementById('audioFile');
+  const agentModeBtn = document.getElementById('agentModeBtn');
+  const meetingModeBtn = document.getElementById('meetingModeBtn');
+  const agentMode = document.getElementById('agentMode');
+  const meetingMode = document.getElementById('meetingMode');
+  const meetingFile = document.getElementById('meetingFile');
+  const processMeetingBtn = document.getElementById('processMeetingBtn');
+  const meetingStatus = document.getElementById('meetingStatus');
+  const meetingProgress = document.getElementById('meetingProgress');
+  const meetingResults = document.getElementById('meetingResults');
+  const meetingMeta = document.getElementById('meetingMeta');
+  const meetingTranscript = document.getElementById('meetingTranscript');
+  const meetingSummary = document.getElementById('meetingSummary');
+  const summaryText = document.getElementById('summaryText');
+  const dispatchModeBtn = document.getElementById('dispatchModeBtn');
+  const dispatchMode = document.getElementById('dispatchMode');
+  const assistxPill = document.getElementById('assistxPill');
+  const dispatchUrl = document.getElementById('dispatchUrl');
+  const dispatchToken = document.getElementById('dispatchToken');
+  const dispatchEventType = document.getElementById('dispatchEventType');
+  const dispatchAuto = document.getElementById('dispatchAuto');
+  const dispatchText = document.getElementById('dispatchText');
+  const dispatchMeta = document.getElementById('dispatchMeta');
+  const dispatchSendBtn = document.getElementById('dispatchSendBtn');
+  const dispatchLog = document.getElementById('dispatchLog');
+  const dispatchAuthBtn = document.getElementById('dispatchAuthBtn');
+  const dispatchMeetingBtn = document.getElementById('dispatchMeetingBtn');
+  const downloadTranscriptBtn = document.getElementById('downloadTranscriptBtn');
+  const meetingHistoryList = document.getElementById('meetingHistoryList');
+  const meetingHistoryStatus = document.getElementById('meetingHistoryStatus');
+  const speakerList = document.getElementById('speakerList');
+  const refreshSpeakersBtn = document.getElementById('refreshSpeakersBtn');
+  const autoDispatchToggle = document.getElementById('autoDispatchToggle');
+  const autoDispatchPill = document.getElementById('autoDispatchPill');
+  const saveDispatchConfigBtn = document.getElementById('saveDispatchConfigBtn');
+
+  let lastScore = null, lastAccepted = null;
 
   let recorder, stream, chunks = [], blob = null, selectedFile = null, startedAt = 0, recognition = null;
   let audioCtx, analyser, raf;
   let cachedContext = null;
+  let lastAuthResult = null, lastMeetingResult = null;
 
   function getDeviceId() {
     const key = 'sophia_device_id';
@@ -231,6 +467,88 @@ CAPTURE_PAGE = """<!doctype html>
     return Boolean(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
   }
 
+  function setAuthPill(state, text) {
+    authStatus.className = 'pill auth ' + state;
+    authStatus.textContent = text;
+  }
+
+  function showAuthResult(score, accepted) {
+    lastScore = score;
+    lastAccepted = accepted;
+    lastAuthResult = { score, accepted, userId: userId.value };
+    authResult.classList.remove('hidden');
+    authScore.textContent = (score * 100).toFixed(0) + '%';
+    authScore.className = 'auth-score ' + (accepted ? 'pass' : 'fail');
+    authAccepted.textContent = accepted ? '✓ Accepted' : '✗ Rejected';
+    authAccepted.style.color = accepted ? '#34d399' : '#fb7185';
+    setAuthPill(accepted ? 'pass' : 'fail', accepted ? '✓ ' + (score*100).toFixed(0) + '%' : '✗ ' + (score*100).toFixed(0) + '%');
+    enrollBtn.disabled = !accepted;
+    dispatchAuthBtn.disabled = !accepted;
+    if (!accepted) {
+      enrollBtn.title = 'Verify successfully first to enable enrollment';
+      dispatchAuthBtn.title = 'Verify successfully first to enable dispatch';
+    } else {
+      enrollBtn.title = '';
+      dispatchAuthBtn.title = '';
+    }
+  }
+
+  async function verifyVoice() {
+    const audioSrc = selectedFile || blob;
+    if (!audioSrc) { return; }
+    const form = new FormData();
+    form.append('audio', audioSrc, audioSrc.name || 'capture.webm');
+    form.append('user_id', userId.value || 'default');
+    saveStatus.textContent = 'Verifying voice...';
+    setAuthPill('enrolling', 'checking...');
+    try {
+      const res = await fetch('/auth/verify', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Verify failed');
+      showAuthResult(data.score, data.accepted);
+      const msg = data.accepted
+        ? 'Voice verified ✓ score=' + data.score.toFixed(4)
+        : 'Voice rejected ✗ score=' + data.score.toFixed(4) + ' — try recording again in a quiet space';
+      saveStatus.textContent = msg;
+      if (data.accepted && autoDispatchToggle.checked) {
+        saveStatus.textContent = msg + ' — dispatching to AssistX...';
+        const result = await autoDispatch('voice_auth',
+          'Voice auth: user=' + userId.value + ' score=' + (data.score * 100).toFixed(0) + '%',
+          { score: data.score, accepted: data.accepted, userId: userId.value }
+        );
+        saveStatus.textContent = msg + (result.sent ? ' — dispatched ✓' : ' — dispatch failed');
+      }
+    } catch (err) {
+      setAuthPill('fail', 'error');
+      saveStatus.textContent = 'Verify error: ' + err.message;
+    }
+  }
+
+  async function enrollVoice() {
+    const audioSrc = selectedFile || blob;
+    if (!audioSrc) { return; }
+    if (!lastAccepted) {
+      saveStatus.textContent = 'Verify your voice first before enrolling.';
+      return;
+    }
+    const form = new FormData();
+    form.append('audio', audioSrc, audioSrc.name || 'capture.webm');
+    form.append('user_id', userId.value || 'default');
+    saveStatus.textContent = 'Enrolling voice sample...';
+    setAuthPill('enrolling', 'enrolling...');
+    try {
+      const res = await fetch('/voiceprints/enroll', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Enroll failed');
+      setAuthPill('pass', 'enrolled (' + data.sample_count + ')');
+      enrollCount.textContent = data.sample_count + ' samples enrolled';
+      saveStatus.textContent = 'Voice enrolled ✓ (' + data.sample_count + ' total samples)';
+    } catch (err) {
+      setAuthPill('fail', 'error');
+      saveStatus.textContent = 'Enroll error: ' + err.message;
+    }
+  }
+
   function enableFallback(message) {
     fallback.classList.add('active');
     startBtn.disabled = true;
@@ -282,6 +600,7 @@ CAPTURE_PAGE = """<!doctype html>
     selectedFile = null;
     saveBtn.disabled = true;
     saveStatus.textContent = '';
+    authResult.classList.add('hidden');
     if (!hasLiveMic()) {
       enableFallback('Live microphone recording needs HTTPS on iOS Safari. Use the audio file picker below to record or upload.');
       return;
@@ -295,6 +614,10 @@ CAPTURE_PAGE = """<!doctype html>
       preview.src = URL.createObjectURL(blob);
       preview.hidden = false;
       saveBtn.disabled = false;
+      verifyBtn.disabled = false;
+      enrollBtn.disabled = true;
+      authResult.classList.add('hidden');
+      statusEl.textContent = 'Recording stopped. Verify your voice, then enroll or save.';
     };
     recognition = makeRecognition();
     try { recognition && recognition.start(); } catch {}
@@ -338,6 +661,9 @@ CAPTURE_PAGE = """<!doctype html>
     const data = await res.json();
     latest.textContent = JSON.stringify(data, null, 2);
     if (!res.ok) throw new Error(data.detail || 'Capture failed');
+    const count = parseInt(localStorage.getItem('sophia_capture_count') || '0') + 1;
+    localStorage.setItem('sophia_capture_count', String(count));
+    captureCount.textContent = count + ' capture' + (count !== 1 ? 's' : '') + ' saved';
     saveStatus.textContent = data.graph_saved ? 'Saved to sidecar and Neo4j.' : 'Saved locally; graph not written.';
   }
 
@@ -346,6 +672,8 @@ CAPTURE_PAGE = """<!doctype html>
   });
   stopBtn.onclick = stop;
   saveBtn.onclick = () => save().catch(err => { saveStatus.textContent = err.message; });
+  verifyBtn.onclick = () => verifyVoice();
+  enrollBtn.onclick = () => enrollVoice();
   transcriptEl.oninput = () => { saveBtn.disabled = !blob && !selectedFile && !transcriptEl.value.trim(); };
   audioFile.onchange = () => {
     selectedFile = audioFile.files && audioFile.files[0] ? audioFile.files[0] : null;
@@ -354,6 +682,9 @@ CAPTURE_PAGE = """<!doctype html>
       preview.src = URL.createObjectURL(selectedFile);
       preview.hidden = false;
       saveBtn.disabled = false;
+      verifyBtn.disabled = false;
+      enrollBtn.disabled = true;
+      authResult.classList.add('hidden');
       startedAt = Date.now();
       statusEl.textContent = 'Audio selected. Add or edit transcript, then save.';
     }
@@ -366,13 +697,359 @@ CAPTURE_PAGE = """<!doctype html>
     selectedFile = null;
     audioFile.value = '';
     saveBtn.disabled = true;
+    verifyBtn.disabled = true;
+    enrollBtn.disabled = true;
+    authResult.classList.add('hidden');
     latest.textContent = '{}';
   };
+
+  function switchMode(mode) {
+    [agentMode, meetingMode, dispatchMode].forEach(el => el.style.display = 'none');
+    [agentModeBtn, meetingModeBtn, dispatchModeBtn].forEach(el => el.classList.remove('active'));
+    if (mode === 'meeting') {
+      meetingMode.style.display = '';
+      meetingModeBtn.classList.add('active');
+      loadMeetingHistory();
+    } else if (mode === 'dispatch') {
+      dispatchMode.style.display = '';
+      dispatchModeBtn.classList.add('active');
+      refreshDispatchStatus();
+    } else {
+      agentMode.style.display = '';
+      agentModeBtn.classList.add('active');
+    }
+  }
+  agentModeBtn.onclick = () => switchMode('agent');
+  meetingModeBtn.onclick = () => switchMode('meeting');
+  dispatchModeBtn.onclick = () => switchMode('dispatch');
+
+  meetingFile.onchange = () => {
+    processMeetingBtn.disabled = !(meetingFile.files && meetingFile.files[0]);
+    meetingStatus.textContent = meetingFile.files && meetingFile.files[0]
+      ? 'Ready to process: ' + meetingFile.files[0].name
+      : 'Upload an audio file to process.';
+    meetingResults.style.display = 'none';
+  };
+
+  async function processMeeting() {
+    const file = meetingFile.files && meetingFile.files[0];
+    if (!file) return;
+    processMeetingBtn.disabled = true;
+    meetingProgress.style.width = '10%';
+    meetingStatus.textContent = 'Processing meeting audio...';
+    meetingResults.style.display = 'none';
+    const form = new FormData();
+    form.append('audio', file, file.name || 'meeting.webm');
+    form.append('summarize', 'true');
+    try {
+      meetingProgress.style.width = '30%';
+      const res = await fetch('/meeting/process', { method: 'POST', body: form });
+      meetingProgress.style.width = '80%';
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Processing failed');
+      meetingProgress.style.width = '100%';
+      lastMeetingResult = data;
+      const graphBadge = data.graph_saved ? '&#x1F5C4; graph saved' : (data.graph_error ? '&#x26A0; graph error' : '');
+      meetingStatus.textContent = 'Done. ' + data.segments.length + ' segments, ' + data.num_speakers + ' speaker(s).';
+      meetingMeta.innerHTML = '<span>' + data.duration_s + 's audio</span><span>' + data.num_speakers + ' speaker(s)</span><span>' + data.segments.length + ' segments</span>' + (graphBadge ? '<span>' + graphBadge + '</span>' : '');
+      meetingTranscript.innerHTML = data.segments.map(s => {
+        const name = s.name || 'Speaker ' + (s.speaker + 1);
+        const time = s.start.toFixed(1) + 's - ' + s.end.toFixed(1) + 's';
+        return '<div class="meeting-segment"><div class="speaker-label">' + name + ' <span class="seg-time">' + time + (s.confidence ? ' (' + (s.confidence*100).toFixed(0) + '%)' : '') + '</span></div><div>' + (s.transcript || '(no speech)') + '</div></div>';
+      }).join('');
+      if (data.summary) {
+        meetingSummary.style.display = '';
+        summaryText.textContent = data.summary;
+      } else {
+        meetingSummary.style.display = 'none';
+      }
+      meetingResults.style.display = '';
+      if (autoDispatchToggle.checked && data.transcript) {
+        meetingStatus.textContent = 'Done. Dispatching to AssistX...';
+        const dispatchMeta = {
+          duration_s: data.duration_s,
+          num_speakers: data.num_speakers,
+          meeting_id: data.meeting_id,
+          graph_saved: data.graph_saved,
+        };
+        const result = await autoDispatch('meeting_transcript', data.transcript.slice(0, 500), dispatchMeta);
+        if (result.sent) {
+          meetingMeta.innerHTML += '<span>&#x1F4E4; dispatched</span>';
+        }
+      }
+    } catch (err) {
+      meetingStatus.textContent = 'Error: ' + err.message;
+      meetingProgress.style.width = '0%';
+    } finally {
+      processMeetingBtn.disabled = false;
+    }
+  }
+  processMeetingBtn.onclick = processMeeting;
+
+  async function loadMeetingHistory() {
+    meetingHistoryStatus.textContent = 'Loading history...';
+    try {
+      const res = await fetch('/meeting/history?limit=20');
+      const data = await res.json();
+      if (data.error) { meetingHistoryStatus.textContent = 'Error: ' + data.error; return; }
+      if (!data.meetings || data.meetings.length === 0) {
+        meetingHistoryList.innerHTML = '<div style="color:#64748b;font-size:13px;padding:8px;">No meetings yet.</div>';
+        meetingHistoryStatus.textContent = '';
+        return;
+      }
+      meetingHistoryList.innerHTML = data.meetings.map(m => {
+        const date = m.created_at ? new Date(m.created_at).toLocaleDateString() : '?';
+        const label = '[' + date + '] ' + m.duration_s + 's, ' + m.num_speakers + ' spk, ' + m.segment_count + ' segs';
+        return '<div class="meeting-segment" style="cursor:pointer;font-size:12px;" onclick="loadMeetingDetail(\'' + m.id + '\')">'
+          + '<div class="speaker-label">' + label + (m.has_summary ? ' &#x1F4DD;' : '') + '</div>'
+          + '<div>' + (m.transcript || '(no transcript)') + '</div></div>';
+      }).join('');
+      meetingHistoryStatus.textContent = data.meetings.length + ' meetings';
+    } catch (err) {
+      meetingHistoryStatus.textContent = 'Error loading history: ' + err.message;
+    }
+  }
+
+  window.loadMeetingDetail = async function(meetingId) {
+    meetingHistoryStatus.textContent = 'Loading meeting...';
+    try {
+      const res = await fetch('/meeting/history/' + encodeURIComponent(meetingId));
+      const data = await res.json();
+      if (data.error) { meetingHistoryStatus.textContent = 'Error: ' + data.error; return; }
+      meetingMeta.innerHTML = '<span>' + data.duration_s + 's audio</span><span>' + data.num_speakers + ' speaker(s)</span><span>' + (data.segments || []).length + ' segments</span>';
+      meetingTranscript.innerHTML = (data.segments || []).map(s => {
+        const name = s.speaker || 'Speaker ?';
+        const time = (s.start || 0).toFixed(1) + 's - ' + (s.end || 0).toFixed(1) + 's';
+        return '<div class="meeting-segment"><div class="speaker-label">' + name + ' <span class="seg-time">' + time + '</span></div><div>' + (s.transcript || '(no speech)') + '</div></div>';
+      }).join('');
+      if (data.summary) {
+        meetingSummary.style.display = '';
+        summaryText.textContent = data.summary;
+      } else {
+        meetingSummary.style.display = 'none';
+      }
+      lastMeetingResult = data;
+      meetingResults.style.display = '';
+      meetingHistoryStatus.textContent = 'Loaded meeting from history.';
+      switchMode('meeting');
+    } catch (err) {
+      meetingHistoryStatus.textContent = 'Error: ' + err.message;
+    }
+  };
+
+  async function loadSpeakers() {
+    try {
+      const res = await fetch('/voiceprints/status');
+      const data = await res.json();
+      if (data.error) { speakerList.innerHTML = '<div style="color:#fb7185;font-size:13px;">Error: ' + data.error + '</div>'; return; }
+      if (!data.users || data.users.length === 0) {
+        speakerList.innerHTML = '<div style="color:#64748b;font-size:13px;">No enrolled speakers. Record and verify your voice, then Enroll.</div>';
+        return;
+      }
+      speakerList.innerHTML = data.users.map(u => {
+        return '<div class="meeting-segment" style="font-size:13px;"><span class="speaker-label">' + u.user_id + '</span>'
+          + ' <span style="color:#94a3b8;">' + u.sample_count + ' samples</span>'
+          + ' <span style="color:#64748b;font-size:11px;">threshold: ' + u.threshold + '</span></div>';
+      }).join('');
+    } catch (err) {
+      speakerList.innerHTML = '<div style="color:#fb7185;font-size:13px;">Error: ' + err.message + '</div>';
+    }
+  }
+
+  downloadTranscriptBtn.onclick = () => {
+    if (!lastMeetingResult) return;
+    const text = 'Meeting Transcript\n' + '='.repeat(40) + '\n\n'
+      + 'Duration: ' + (lastMeetingResult.duration_s || '?') + 's\n'
+      + 'Speakers: ' + (lastMeetingResult.num_speakers || '?') + '\n\n'
+      + (lastMeetingResult.transcript || '') + '\n\n'
+      + (lastMeetingResult.summary ? 'Summary:\n' + lastMeetingResult.summary : '');
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'meeting_' + (lastMeetingResult.meeting_id || Date.now()) + '.txt';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  refreshSpeakersBtn.onclick = loadSpeakers;
+
+  async function refreshDispatchStatus() {
+    try {
+      assistxPill.textContent = 'assistx: checking...';
+      assistxPill.style.borderColor = '#555';
+      assistxPill.style.color = '#9aa7b6';
+      const res = await fetch('/dispatch/status');
+      const data = await res.json();
+      if (data.assistx_reachable) {
+        assistxPill.textContent = 'assistx: connected (' + data.dispatched_count + ' sent)';
+        assistxPill.style.borderColor = '#34d399';
+        assistxPill.style.color = '#6ee7b7';
+      } else {
+        assistxPill.textContent = 'assistx: unreachable';
+        assistxPill.style.borderColor = '#fb7185';
+        assistxPill.style.color = '#fda4af';
+      }
+    } catch {
+      assistxPill.textContent = 'assistx: error';
+      assistxPill.style.borderColor = '#fb7185';
+      assistxPill.style.color = '#fda4af';
+    }
+  }
+
+  async function sendDispatch() {
+    const payload = {
+      event_type: dispatchEventType.value,
+      text: dispatchText.value,
+      metadata: {},
+      auto_dispatch: dispatchAuto.value === 'true',
+      target_url: dispatchUrl.value,
+      target_token: dispatchToken.value,
+    };
+    try {
+      const meta = JSON.parse(dispatchMeta.value || '{}');
+      if (typeof meta === 'object' && !Array.isArray(meta)) payload.metadata = meta;
+    } catch {}
+    dispatchSendBtn.disabled = true;
+    dispatchSendBtn.textContent = 'Sending...';
+    try {
+      const res = await fetch('/dispatch/to-assistx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      const entry = document.createElement('div');
+      const statusClass = data.sent ? 'sent' : 'failed';
+      entry.className = 'dispatch-entry ' + statusClass;
+      const time = new Date().toLocaleTimeString();
+      entry.innerHTML = '<div><span class="de-type">' + payload.event_type + '</span><span class="de-time">' + time + '</span></div>'
+        + '<div class="de-status">' + (data.sent ? '&#10003; Sent' : '&#10007; Failed') + '</div>'
+        + (data.error ? '<div class="de-error">' + data.error + '</div>' : '')
+        + (payload.text ? '<div style="color:#94a3b8;font-size:11px;">' + payload.text.slice(0, 80) + '</div>' : '');
+      dispatchLog.prepend(entry);
+      while (dispatchLog.children.length > 50) dispatchLog.removeChild(dispatchLog.lastChild);
+      refreshDispatchStatus();
+    } catch (err) {
+      const entry = document.createElement('div');
+      entry.className = 'dispatch-entry failed';
+      entry.innerHTML = '<div><span class="de-type">' + payload.event_type + '</span><span class="de-time">' + new Date().toLocaleTimeString() + '</span></div>'
+        + '<div class="de-error">Network error: ' + err.message + '</div>';
+      dispatchLog.prepend(entry);
+    } finally {
+      dispatchSendBtn.disabled = false;
+      dispatchSendBtn.textContent = 'Send to AssistX';
+    }
+  }
+  dispatchSendBtn.onclick = sendDispatch;
+
+  function loadDispatchConfig() {
+    try {
+      const saved = localStorage.getItem('sophia_dispatch_config');
+      if (saved) {
+        const cfg = JSON.parse(saved);
+        if (cfg.url) dispatchUrl.value = cfg.url;
+        if (cfg.token) dispatchToken.value = cfg.token;
+        autoDispatchToggle.checked = cfg.auto_dispatch === true;
+        updateAutoPill();
+      }
+    } catch {}
+  }
+
+  function saveDispatchConfig() {
+    const cfg = {
+      url: dispatchUrl.value,
+      token: dispatchToken.value,
+      auto_dispatch: autoDispatchToggle.checked,
+    };
+    localStorage.setItem('sophia_dispatch_config', JSON.stringify(cfg));
+    saveDispatchConfigBtn.textContent = 'Saved!';
+    setTimeout(() => { saveDispatchConfigBtn.textContent = 'Save Config'; }, 2000);
+  }
+  saveDispatchConfigBtn.onclick = saveDispatchConfig;
+
+  function updateAutoPill() {
+    if (autoDispatchToggle.checked) {
+      autoDispatchPill.style.display = '';
+      autoDispatchPill.textContent = 'auto: on';
+      autoDispatchPill.style.borderColor = '#34d399';
+      autoDispatchPill.style.color = '#6ee7b7';
+    } else {
+      autoDispatchPill.style.display = 'none';
+    }
+  }
+  autoDispatchToggle.onchange = updateAutoPill;
+
+  function getDispatchConfig() {
+    return {
+      target_url: dispatchUrl.value,
+      target_token: dispatchToken.value,
+      auto_dispatch: autoDispatchToggle.checked,
+    };
+  }
+
+  async function autoDispatch(eventType, text, metadata) {
+    const cfg = getDispatchConfig();
+    if (!cfg.auto_dispatch) return { sent: false, skipped: 'auto_dispatch_off' };
+    const payload = { event_type: eventType, text, metadata, ...cfg };
+    try {
+      const res = await fetch('/dispatch/to-assistx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      const entry = document.createElement('div');
+      entry.className = 'dispatch-entry ' + (data.sent ? 'sent' : 'failed');
+      entry.innerHTML = '<div><span class="de-type">auto: ' + eventType + '</span><span class="de-time">' + new Date().toLocaleTimeString() + '</span></div>'
+        + '<div class="de-status">' + (data.sent ? '&#10003; Auto-sent' : '&#10007; Failed') + '</div>'
+        + (data.error ? '<div class="de-error">' + data.error + '</div>' : '')
+        + (text ? '<div style="color:#94a3b8;font-size:11px;">' + text.slice(0, 80) + '</div>' : '');
+      dispatchLog.prepend(entry);
+      while (dispatchLog.children.length > 50) dispatchLog.removeChild(dispatchLog.lastChild);
+      refreshDispatchStatus();
+      return data;
+    } catch (err) {
+      return { sent: false, error: err.message };
+    }
+  }
+  loadDispatchConfig();
+
+  function populateAndSwitchToDispatch(eventType, text, meta) {
+    dispatchEventType.value = eventType;
+    dispatchText.value = text;
+    dispatchMeta.value = JSON.stringify(meta || {}, null, 2);
+    switchMode('dispatch');
+  }
+
+  dispatchAuthBtn.onclick = () => {
+    if (!lastAuthResult || !lastAuthResult.accepted) return;
+    populateAndSwitchToDispatch('voice_auth',
+      'Voice auth: user=' + lastAuthResult.userId + ' score=' + (lastAuthResult.score * 100).toFixed(0) + '%',
+      { score: lastAuthResult.score, accepted: lastAuthResult.accepted, userId: lastAuthResult.userId }
+    );
+  };
+
+  dispatchMeetingBtn.onclick = () => {
+    if (!lastMeetingResult) return;
+    const meta = {
+      duration_s: lastMeetingResult.duration_s,
+      num_speakers: lastMeetingResult.num_speakers,
+      meeting_id: lastMeetingResult.meeting_id,
+      graph_saved: lastMeetingResult.graph_saved,
+    };
+    const text = lastMeetingResult.transcript ? lastMeetingResult.transcript.slice(0, 500) : 'Meeting processed: ' + lastMeetingResult.duration_s + 's';
+    populateAndSwitchToDispatch('meeting_transcript', text, meta);
+  };
+
   if (!hasLiveMic()) {
     enableFallback(window.isSecureContext
       ? 'Live recording is not available in this browser. Use the upload fallback.'
       : 'Live recording needs HTTPS on iOS Safari. Use the upload fallback, or open the HTTPS endpoint when enabled.');
   }
+  const savedCount = parseInt(localStorage.getItem('sophia_capture_count') || '0');
+  if (savedCount > 0) captureCount.textContent = savedCount + ' capture' + (savedCount !== 1 ? 's' : '') + ' saved';
+  loadSpeakers();
   refreshGraph();
 })();
 </script>
@@ -661,6 +1338,95 @@ def create_app(config: AppConfig) -> FastAPI:
         bus.publish("mobile_capture_saved", payload)
         return {"ok": True, **payload}
 
+    @app.post("/auth/verify")
+    async def auth_verify(
+        audio: UploadFile | None = File(default=None),
+        user_id: str = Form(default="scott"),
+    ) -> Dict[str, Any]:
+        if audio is None:
+            raise HTTPException(status_code=400, detail="audio file is required")
+        tmp_dir = Path(config.paths.artifacts_dir) / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        in_path = tmp_dir / f"verify_{uuid.uuid4().hex}.webm"
+        wav_path = in_path.with_suffix(".wav")
+        try:
+            data = await audio.read()
+            in_path.write_bytes(data)
+            import subprocess
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", str(in_path), "-f", "wav", "-acodec", "pcm_s16le",
+                 "-ac", "1", "-ar", "16000", str(wav_path)],
+                capture_output=True, timeout=30,
+            )
+            if not wav_path.exists():
+                raise RuntimeError("ffmpeg conversion failed")
+            from voice_agent.util.audio import read_wav
+            samples, sr = read_wav(wav_path)
+            result = verify_audio_segment(config, "", user_id, samples, sr)
+            return {
+                "user_id": user_id,
+                "score": result.get("score", 0.0),
+                "accepted": result.get("accepted", False),
+            }
+        finally:
+            for p in [in_path, wav_path]:
+                if p.exists():
+                    p.unlink(missing_ok=True)
+
+    @app.post("/voiceprints/enroll")
+    async def voiceprints_enroll(
+        audio: UploadFile | None = File(default=None),
+        user_id: str = Form(default="scott"),
+    ) -> Dict[str, Any]:
+        if audio is None:
+            raise HTTPException(status_code=400, detail="audio file is required")
+        tmp_dir = Path(config.paths.artifacts_dir) / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        ext = ".webm"
+        if audio.filename and "." in audio.filename:
+            ext = "." + audio.filename.rsplit(".", 1)[-1].lower()
+        in_path = tmp_dir / f"enroll_{uuid.uuid4().hex}{ext}"
+        wav_path = in_path.with_suffix(".wav")
+        try:
+            data = await audio.read()
+            in_path.write_bytes(data)
+            import subprocess
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", str(in_path), "-f", "wav", "-acodec", "pcm_s16le",
+                 "-ac", "1", "-ar", "16000", str(wav_path)],
+                capture_output=True, timeout=30,
+            )
+            if not wav_path.exists():
+                raise RuntimeError("ffmpeg conversion failed")
+            from voice_agent.util.audio import read_wav
+            samples, sr = read_wav(wav_path)
+            from voice_agent.auth.speaker_embedder import SpeakerEmbedder
+            embedder = SpeakerEmbedder()
+            embedding = embedder.embed(samples, sr)
+            from ..auth.registry import VoiceprintRegistry
+            registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite")
+            existing = registry.get(user_id)
+            if existing:
+                old_emb = existing["embedding"]
+                n = existing.get("samples", {}).get("count", 1)
+                merged = [(old_emb[i] * n + embedding[i]) / (n + 1) for i in range(len(embedding))]
+                samples_info = existing.get("samples", {})
+                samples_info["count"] = n + 1
+                samples_info.setdefault("files", []).append(str(wav_path))
+                registry.save(user_id, merged, samples_info, existing["threshold"])
+                sample_count = n + 1
+            else:
+                registry.save(user_id, embedding, {"count": 1, "files": [str(wav_path)]}, 0.60)
+                sample_count = 1
+            return {
+                "user_id": user_id,
+                "sample_count": sample_count,
+            }
+        finally:
+            for p in [in_path, wav_path]:
+                if p.exists():
+                    p.unlink(missing_ok=True)
+
     @app.post("/voiceprints/train-neo4j")
     async def train_voiceprint_from_neo4j(req: Neo4jEnrollRequest) -> Dict[str, Any]:
         uri = req.neo4j_uri or config.neo4j.uri
@@ -691,6 +1457,253 @@ def create_app(config: AppConfig) -> FastAPI:
         payload = {"user_id": req.user_id, "sample_count": len(files), "source": "neo4j"}
         bus.publish("voiceprint_trained", payload)
         return {"ok": True, **payload}
+
+    @app.post("/meeting/process")
+    async def meeting_process(
+        audio: UploadFile | None = File(default=None),
+        summarize: bool = Form(default=True),
+    ) -> Dict[str, Any]:
+        if audio is None:
+            raise HTTPException(status_code=400, detail="audio file is required")
+        tmp_dir = Path(config.paths.artifacts_dir) / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        in_path = tmp_dir / f"meeting_{uuid.uuid4().hex}.webm"
+        wav_path = in_path.with_suffix(".wav")
+        try:
+            data = await audio.read()
+            in_path.write_bytes(data)
+            import subprocess
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", str(in_path), "-f", "wav", "-acodec", "pcm_s16le",
+                 "-ac", "1", "-ar", "16000", str(wav_path)],
+                capture_output=True, timeout=60,
+            )
+            if not wav_path.exists():
+                raise RuntimeError("ffmpeg conversion failed")
+            samples, sr = read_wav(wav_path)
+            duration_s = len(samples) / sr
+            if duration_s < 1.0:
+                raise HTTPException(status_code=400, detail="Audio too short (<1s)")
+            segments = diarize(samples, sr)
+            registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite")
+            enrolled = {}
+            for uid in ["scott", "default"]:
+                rec = registry.get(uid)
+                if rec:
+                    enrolled[uid] = rec
+            if enrolled:
+                embedder = SpeakerEmbedder()
+                segments = identify_speakers(segments, enrolled, embedder, sr, samples)
+            full_transcript_parts = []
+            for seg in segments:
+                start_samp = int(seg["start"] * sr)
+                end_samp = int(seg["end"] * sr)
+                chunk = samples[start_samp:end_samp]
+                if len(chunk) < int(sr * 0.3):
+                    seg["transcript"] = ""
+                    continue
+                text = refine_transcript(chunk, sr, config.stt)
+                seg["transcript"] = text
+                name = seg.get("name", f"Speaker {seg['speaker'] + 1}")
+                full_transcript_parts.append(f"[{name}]: {text}")
+            summary = None
+            if summarize and full_transcript_parts:
+                meeting_text = "\n".join(full_transcript_parts)
+                prompt = (
+                    "Summarize this meeting transcript. Extract:\n"
+                    "- Key decisions made\n"
+                    "- Action items with owner if mentioned\n"
+                    "- Main discussion topics\n\n"
+                    f"Transcript:\n{meeting_text}"
+                )
+                try:
+                    if intent_provider:
+                        summary = intent_provider.complete(prompt).content.strip()
+                    else:
+                        summary = manager.pipeline.ralph.run(prompt)
+                except Exception:
+                    summary = None
+            meeting_id = uuid.uuid4().hex
+            full_transcript = "\n".join(full_transcript_parts)
+            graph_saved = False
+            graph_error = None
+            if config.neo4j.password:
+                try:
+                    from ..auth.neo4j_ingest import save_meeting_to_neo4j
+                    save_meeting_to_neo4j(
+                        config.neo4j.uri,
+                        config.neo4j.user,
+                        config.neo4j.password,
+                        meeting_id=meeting_id,
+                        transcript=full_transcript,
+                        segments=segments,
+                        duration_s=duration_s,
+                        num_speakers=len(set(s["speaker"] for s in segments if s["speaker"] >= 0)),
+                        summary=summary,
+                        database=config.neo4j.database,
+                    )
+                    graph_saved = True
+                except Exception as exc:
+                    graph_error = f"{type(exc).__name__}: {exc}"
+            return {
+                "ok": True,
+                "meeting_id": meeting_id,
+                "duration_s": round(duration_s, 1),
+                "num_speakers": len(set(s["speaker"] for s in segments if s["speaker"] >= 0)),
+                "segments": segments,
+                "transcript": full_transcript,
+                "summary": summary,
+                "graph_saved": graph_saved,
+                "graph_error": graph_error,
+            }
+        finally:
+            for p in [in_path, wav_path]:
+                if p.exists():
+                    p.unlink(missing_ok=True)
+
+    @app.get("/meeting/history")
+    async def meeting_history(limit: int = 20) -> Dict[str, Any]:
+        if not config.neo4j.password:
+            return {"meetings": [], "error": "Neo4j not configured"}
+        try:
+            from neo4j import GraphDatabase
+            driver = GraphDatabase.driver(config.neo4j.uri, auth=(config.neo4j.user, config.neo4j.password))
+            meetings = []
+            with driver.session(database=config.neo4j.database) as sess:
+                result = sess.run(
+                    "MATCH (m:Meeting) "
+                    "OPTIONAL MATCH (m)-[:HAS_SEGMENT]->(seg:MeetingSegment) "
+                    "WITH m, count(seg) AS seg_count "
+                    "RETURN m.id AS id, m.duration_s AS duration_s, m.num_speakers AS num_speakers, "
+                    "m.transcript AS transcript, m.summary AS summary, m.created_at AS created_at, seg_count "
+                    "ORDER BY m.created_at DESC LIMIT $limit",
+                    limit=limit,
+                )
+                for rec in result:
+                    meetings.append({
+                        "id": rec["id"],
+                        "duration_s": rec.get("duration_s"),
+                        "num_speakers": rec.get("num_speakers"),
+                        "transcript": (rec.get("transcript") or "")[:200],
+                        "has_summary": bool(rec.get("summary")),
+                        "segment_count": rec.get("seg_count", 0),
+                        "created_at": str(rec.get("created_at") or ""),
+                    })
+            driver.close()
+            return {"meetings": meetings}
+        except Exception as exc:
+            return {"meetings": [], "error": f"{type(exc).__name__}: {exc}"}
+
+    @app.get("/meeting/history/{meeting_id}")
+    async def meeting_detail(meeting_id: str) -> Dict[str, Any]:
+        if not config.neo4j.password:
+            return {"error": "Neo4j not configured"}
+        try:
+            from neo4j import GraphDatabase
+            driver = GraphDatabase.driver(config.neo4j.uri, auth=(config.neo4j.user, config.neo4j.password))
+            with driver.session(database=config.neo4j.database) as sess:
+                result = sess.run(
+                    "MATCH (m:Meeting {id: $id}) "
+                    "OPTIONAL MATCH (m)-[:HAS_SEGMENT]->(seg:MeetingSegment) "
+                    "WITH m, seg ORDER BY seg.segment_idx "
+                    "RETURN m.id AS id, m.duration_s AS duration_s, m.num_speakers AS num_speakers, "
+                    "m.transcript AS transcript, m.summary AS summary, m.created_at AS created_at, "
+                    "collect({idx: seg.segment_idx, start: seg.start_s, end: seg.end_s, "
+                    "speaker: seg.speaker, transcript: seg.transcript, confidence: seg.confidence}) AS segments",
+                    id=meeting_id,
+                )
+                rec = result.single()
+                if not rec:
+                    return {"error": "Meeting not found"}
+                driver.close()
+                return {
+                    "id": rec["id"],
+                    "duration_s": rec.get("duration_s"),
+                    "num_speakers": rec.get("num_speakers"),
+                    "transcript": rec.get("transcript") or "",
+                    "summary": rec.get("summary"),
+                    "created_at": str(rec.get("created_at") or ""),
+                    "segments": [s for s in (rec.get("segments") or []) if s.get("idx") is not None],
+                }
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
+    @app.get("/voiceprints/status")
+    async def voiceprints_status() -> Dict[str, Any]:
+        registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite")
+        try:
+            from ..util.db import Database
+            db = Database(Path(config.paths.artifacts_dir) / "results.sqlite")
+            cur = db.conn.cursor()
+            cur.execute("SELECT user_id, samples_json, threshold FROM voiceprints")
+            users = []
+            for row in cur.fetchall():
+                samples = json.loads(row[1])
+                users.append({
+                    "user_id": row[0],
+                    "sample_count": samples.get("count", 0),
+                    "threshold": row[2],
+                })
+            return {"users": users, "count": len(users)}
+        except Exception as exc:
+            return {"users": [], "error": f"{type(exc).__name__}: {exc}"}
+
+    dispatch_history: list = []
+
+    @app.get("/dispatch/status")
+    async def dispatch_status() -> Dict[str, Any]:
+        import httpx
+        base = "http://host.docker.internal:8000"
+        assistx_ok = False
+        try:
+            r = httpx.get(f"{base}/health", timeout=3)
+            assistx_ok = r.status_code == 200
+        except Exception:
+            pass
+        return {
+            "assistx_reachable": assistx_ok,
+            "assistx_url": base,
+            "dispatched_count": len(dispatch_history),
+            "last_dispatch": dispatch_history[-1] if dispatch_history else None,
+        }
+
+    @app.post("/dispatch/to-assistx")
+    async def dispatch_to_assistx(req: DispatchRequest) -> Dict[str, Any]:
+        import httpx, time, hmac, hashlib
+        base = req.target_url
+        event_id = uuid.uuid4().hex
+        metadata = req.metadata if req.metadata and any(k for k in req.metadata if req.metadata[k]) else None
+        ts = str(time.time())
+        payload = OrderedDict()
+        payload["event_id"] = event_id
+        payload["event_type"] = req.event_type
+        if req.text:
+            payload["text"] = req.text
+        payload["source"] = "sophia_voice"
+        if req.session_id:
+            payload["session_id"] = req.session_id
+        payload["client_ts"] = ts
+        if metadata is not None:
+            payload["metadata"] = metadata
+        payload["auto_dispatch"] = req.auto_dispatch
+        body_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        sig = hmac.new(req.target_token.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
+        headers["X-Voice-Signature"] = f"sha256={sig}"
+        result = {"event_id": event_id, "sent": False, "error": None, "response": None}
+        try:
+            r = httpx.post(f"{base}/api/voice/events", content=body_bytes, headers=headers, timeout=10)
+            result["sent"] = r.status_code == 200
+            if r.status_code == 200:
+                result["response"] = r.json()
+            else:
+                result["error"] = f"HTTP {r.status_code}: {r.text[:300]}"
+        except Exception as exc:
+            result["error"] = f"{type(exc).__name__}: {exc}"
+        dispatch_history.append({**result, "event_type": req.event_type, "ts_ms": now_ms()})
+        if len(dispatch_history) > 100:
+            dispatch_history[:] = dispatch_history[-100:]
+        return result
 
     @app.websocket("/events")
     async def events_ws(websocket: WebSocket) -> None:
