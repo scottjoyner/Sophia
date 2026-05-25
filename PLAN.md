@@ -1,6 +1,6 @@
 # Sophia Voice — Plan
 
-## Status: Meeting Mode + Dispatch Hub Live (2026-05-24)
+## Status: Real STT + Debug Log + WebSocket E2E (2026-05-24)
 
 ---
 
@@ -123,6 +123,13 @@
 - [x] Per-speaker color coding on segment borders
 - [x] Delete device from speaker management UI
 - [x] Delete meeting from history UI
+- [x] Debug event log panel (collapsible, auto-refresh every 5s)
+
+### Phase 9: STT Infrastructure
+- [x] faster-whisper + torch + ctranslate2 installed in container
+- [x] Docker `INSTALL_VOICE_INSIGHT_DEPS=1` enabled in docker-compose.yml
+- [x] Real STT verified (training clip transcribed correctly)
+- [x] WebSocket pipeline verified end-to-end
 
 ---
 

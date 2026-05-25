@@ -1,6 +1,9 @@
 services:
   sophia-voice:
-    build: .
+    build:
+      context: .
+      args:
+        INSTALL_VOICE_INSIGHT_DEPS: 1
     ports:
       - "8765:8765"
     environment:

@@ -215,6 +215,15 @@ CAPTURE_PAGE = """<!doctype html>
   </section>
 
   <section class="capture-section">
+    <details style="margin-bottom:8px;">
+      <summary style="cursor:pointer;color:#64748b;font-size:12px;font-weight:600;">&#x1F50D; Debug Log</summary>
+      <div id="eventLog" style="max-height:200px;overflow-y:auto;background:#071019;border:1px solid #1e293b;border-radius:6px;padding:8px;margin-top:6px;font-size:11px;font-family:monospace;line-height:1.6;">
+        <div style="color:#64748b;">No events yet.</div>
+      </div>
+      <div class="btn-group" style="margin-top:4px;">
+        <button id="refreshEventsBtn" class="secondary" style="flex:0;padding:4px 10px;min-height:auto;font-size:10px;">&#x21BB; Refresh</button>
+      </div>
+    </details>
     <h2>&#x1F4DD; Capture &amp; Save</h2>
     <label for="transcript">Transcript</label>
     <textarea id="transcript" placeholder="Speak or type what was said."></textarea>
@@ -491,6 +500,28 @@ CAPTURE_PAGE = """<!doctype html>
       graph.textContent = 'graph unavailable';
     }
   }
+
+  async function refreshEventLog() {
+    try {
+      const res = await fetch('/events?limit=50');
+      const data = await res.json();
+      const evts = (data.events || []).slice(-50);
+      const el = document.getElementById('eventLog');
+      if (!evts.length) {
+        el.innerHTML = '<div style="color:#64748b;">No events yet.</div>';
+        return;
+      }
+      el.innerHTML = evts.map(e => {
+        const p = e.payload || {};
+        const text = p.text || p.transcript || '';
+        const score = p.score !== undefined ? ' score=' + p.score.toFixed(3) : '';
+        const accepted = p.accepted !== undefined ? (p.accepted ? '✓' : '✗') : '';
+        const info = text ? ' <span style="color:#94a3b8;">' + text.slice(0, 60) + '</span>' : '';
+        return '<div style="color:#7dd3fc;">' + e.type + '</div><div style="color:#64748b;margin-left:12px;">' + score + accepted + info + '</div>';
+      }).join('');
+    } catch {}
+  }
+  document.getElementById('refreshEventsBtn').onclick = refreshEventLog;
 
   function hasLiveMic() {
     return Boolean(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
@@ -1161,6 +1192,8 @@ CAPTURE_PAGE = """<!doctype html>
   if (savedCount > 0) captureCount.textContent = savedCount + ' capture' + (savedCount !== 1 ? 's' : '') + ' saved';
   loadSpeakers();
   refreshGraph();
+  refreshEventLog();
+  setInterval(refreshEventLog, 5000);
 })();
 </script>
 </body>
