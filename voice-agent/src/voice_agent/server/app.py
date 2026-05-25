@@ -216,6 +216,19 @@ CAPTURE_PAGE = """<!doctype html>
 
   <section class="capture-section">
     <details style="margin-bottom:8px;">
+      <summary style="cursor:pointer;color:#64748b;font-size:12px;font-weight:600;">&#x2699; Settings &amp; Status</summary>
+      <div id="settingsPanel" style="padding:8px 0;font-size:12px;color:#94a3b8;">
+        <div id="llmStatus"><span style="color:#64748b;">LLM: checking...</span></div>
+        <div style="margin-top:6px;">
+          <button id="testLlmBtn" class="secondary" style="flex:0;padding:4px 10px;min-height:auto;font-size:11px;">&#x1F50C; Test LLM</button>
+          <span id="llmTestResult" style="margin-left:8px;font-size:11px;"></span>
+        </div>
+        <div style="margin-top:6px;">
+          <button id="refreshStatusBtn" class="secondary" style="flex:0;padding:4px 10px;min-height:auto;font-size:11px;">&#x21BB; Refresh Status</button>
+        </div>
+      </div>
+    </details>
+    <details style="margin-bottom:8px;">
       <summary style="cursor:pointer;color:#64748b;font-size:12px;font-weight:600;">&#x1F50D; Debug Log</summary>
       <div id="eventLog" style="max-height:200px;overflow-y:auto;background:#071019;border:1px solid #1e293b;border-radius:6px;padding:8px;margin-top:6px;font-size:11px;font-family:monospace;line-height:1.6;">
         <div style="color:#64748b;">No events yet.</div>
@@ -522,6 +535,39 @@ CAPTURE_PAGE = """<!doctype html>
     } catch {}
   }
   document.getElementById('refreshEventsBtn').onclick = refreshEventLog;
+
+  async function refreshStatus() {
+    try {
+      const r = await fetch('/status');
+      const d = await r.json();
+      const llm = d.llm || {};
+      const prov = llm.intent_provider || llm.provider || 'unknown';
+      const enabled = llm.intent_draft_enabled ? '&#x2705;' : '&#x274C;';
+      document.getElementById('llmStatus').innerHTML = 'LLM: <span style="color:#7dd3fc;">' + prov + '</span>'
+        + ' <span style="color:#64748b;">model=' + (llm.intent_model || llm.model) + '</span>'
+        + ' <span>' + enabled + '</span>';
+    } catch {}
+  }
+  document.getElementById('refreshStatusBtn').onclick = refreshStatus;
+
+  async function testLlm() {
+    const btn = document.getElementById('testLlmBtn');
+    const result = document.getElementById('llmTestResult');
+    btn.disabled = true;
+    result.textContent = 'testing...';
+    try {
+      const r = await fetch('/llm/test', { method: 'POST' });
+      const d = await r.json();
+      result.innerHTML = d.ok
+        ? '<span style="color:#34d399;">&#x2705; ' + d.provider + ' ok</span>'
+        : '<span style="color:#fb7185;">&#x274C; ' + (d.error || 'failed') + '</span>';
+    } catch (err) {
+      result.innerHTML = '<span style="color:#fb7185;">&#x274C; ' + err.message + '</span>';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  document.getElementById('testLlmBtn').onclick = testLlm;
 
   function hasLiveMic() {
     return Boolean(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
@@ -1193,6 +1239,7 @@ CAPTURE_PAGE = """<!doctype html>
   loadSpeakers();
   refreshGraph();
   refreshEventLog();
+  refreshStatus();
   setInterval(refreshEventLog, 5000);
 })();
 </script>
@@ -1512,6 +1559,16 @@ def create_app(config: AppConfig) -> FastAPI:
             "has_password": bool(config.neo4j.password),
             "default_speaker_name": config.neo4j.default_speaker_name,
         }
+
+    @app.post("/llm/test")
+    async def llm_test() -> Dict[str, Any]:
+        try:
+            prov = intent_provider or manager.pipeline.ralph.provider
+            resp = prov.complete("Say exactly: LLM_OK")
+            ok = "LLM_OK" in (resp.content or "")
+            return {"ok": ok, "response": (resp.content or "")[:200], "provider": type(prov).__name__}
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "provider": type(intent_provider or manager.pipeline.ralph.provider).__name__}
 
     @app.get("/events")
     async def events(after_id: int = 0, session_id: str | None = None) -> Dict[str, Any]:
