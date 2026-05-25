@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 from sklearn.cluster import AgglomerativeClustering
+from sklearn.preprocessing import normalize
 
 from .speaker_embedder import SpeakerEmbedder
 
@@ -32,18 +33,19 @@ def diarize(
     sample_rate: int,
     window_s: float = 1.5,
     max_speakers: Optional[int] = None,
+    min_speakers: int = 1,
     min_segment_s: float = 0.5,
     speech_pad_s: float = 0.3,
 ) -> List[Dict]:
     vad_segments = _vad_segments(audio, sample_rate, speech_pad_s, min_segment_s)
     if not vad_segments:
-        return [{"start": 0.0, "end": len(audio) / sample_rate, "speaker": 0}]
+        return [{"start": 0.0, "end": len(audio) / sample_rate, "speaker": 0, "cluster_confidence": 1.0}]
     chunks = _split_into_chunks(audio, sample_rate, vad_segments, window_s)
     if len(chunks) < 2:
         merged = _merge_segments([{"start": c["start"], "end": c["end"]} for c in chunks], min_segment_s)
         if not merged:
-            return [{"start": 0.0, "end": len(audio) / sample_rate, "speaker": 0}]
-        return [{"start": merged[0]["start"], "end": merged[-1]["end"], "speaker": 0}]
+            return [{"start": 0.0, "end": len(audio) / sample_rate, "speaker": 0, "cluster_confidence": 1.0}]
+        return [{"start": merged[0]["start"], "end": merged[-1]["end"], "speaker": 0, "cluster_confidence": 1.0}]
 
     embedder = SpeakerEmbedder()
     embeddings = []
@@ -60,24 +62,32 @@ def diarize(
     valid = energy > 1e-6
     if valid.sum() < 1:
         merged = _merge_segments([{"start": c["start"], "end": c["end"]} for c in chunks], min_segment_s)
-        return [{"start": merged[0]["start"], "end": merged[-1]["end"], "speaker": 0}]
+        return [{"start": merged[0]["start"], "end": merged[-1]["end"], "speaker": 0, "cluster_confidence": 1.0}]
 
     emb_valid = emb_matrix[valid]
-    n_total = len(emb_valid)
-    n_clusters = _pick_k(emb_valid, max_speakers)
+    emb_normed = normalize(emb_valid, norm="l2")
+    n = len(emb_normed)
+    n_clusters = _pick_k(emb_normed, max_speakers, min_speakers, n)
     if n_clusters < 2:
         labels = np.zeros(len(chunks), dtype=int)
+        confidences = np.ones(len(chunks))
     else:
         model = AgglomerativeClustering(
             n_clusters=n_clusters,
             metric="cosine",
             linkage="average",
         )
-        cluster_labels = model.fit_predict(emb_valid)
+        cluster_labels = model.fit_predict(emb_normed)
+        centroids = np.array([emb_normed[cluster_labels == k].mean(axis=0) for k in range(n_clusters)])
+        centroids = normalize(centroids, norm="l2")
+        sims = emb_normed @ centroids.T
+        conf_vector = sims[np.arange(n), cluster_labels]
         labels = np.full(len(chunks), -1, dtype=int)
         labels[valid] = cluster_labels
+        confidences = np.zeros(len(chunks))
+        confidences[valid] = conf_vector
 
-    timeline = _build_timeline(chunks, labels, min_segment_s)
+    timeline = _build_timeline(chunks, labels, confidences, min_segment_s)
     return timeline
 
 
@@ -144,16 +154,20 @@ def _split_into_chunks(
     return chunks
 
 
-def _pick_k(embeddings: np.ndarray, max_speakers: Optional[int] = None) -> int:
-    n = len(embeddings)
+def _pick_k(embeddings: np.ndarray, max_speakers: Optional[int], min_speakers: int, n: int) -> int:
     if n <= 2:
         return 1
+    hi = n
     if max_speakers is not None:
-        return min(max(2, max_speakers), n)
+        hi = min(max_speakers + 1, n)
+    hi = min(hi, min(8, n))
+    lo = max(2, min_speakers)
+    if lo >= hi:
+        return lo
     from sklearn.metrics import silhouette_score
     best_k = 1
     best_score = -1
-    for k in range(2, min(n, min(8, n))):
+    for k in range(lo, hi):
         model = AgglomerativeClustering(n_clusters=k, metric="cosine", linkage="average")
         labels = model.fit_predict(embeddings)
         if len(set(labels)) < 2:
@@ -166,13 +180,14 @@ def _pick_k(embeddings: np.ndarray, max_speakers: Optional[int] = None) -> int:
 
 
 def _build_timeline(
-    chunks: List[Dict], labels: np.ndarray, min_segment_s: float
+    chunks: List[Dict], labels: np.ndarray, confidences: np.ndarray, min_segment_s: float
 ) -> List[Dict]:
     if not chunks:
         return []
     timeline = []
     current_spk = labels[0]
     current_start = chunks[0]["start"]
+    current_conf = confidences[0]
     for i, c in enumerate(chunks):
         spk = labels[i]
         if spk != current_spk:
@@ -182,21 +197,27 @@ def _build_timeline(
                     "start": round(current_start, 2),
                     "end": round(c["start"], 2),
                     "speaker": int(current_spk) if current_spk >= 0 else -1,
+                    "cluster_confidence": round(float(current_conf), 4),
                 })
             current_spk = spk
             current_start = c["start"]
+            current_conf = confidences[i]
+        else:
+            current_conf = max(current_conf, confidences[i])
     dur = chunks[-1]["end"] - current_start
     if dur >= min_segment_s:
         timeline.append({
             "start": round(current_start, 2),
             "end": round(chunks[-1]["end"], 2),
             "speaker": int(current_spk) if current_spk >= 0 else -1,
+            "cluster_confidence": round(float(current_conf), 4),
         })
     if not timeline:
         timeline.append({
             "start": round(chunks[0]["start"], 2),
             "end": round(chunks[-1]["end"], 2),
             "speaker": 0,
+            "cluster_confidence": 1.0,
         })
     return timeline
 

@@ -934,7 +934,10 @@ CAPTURE_PAGE = """<!doctype html>
       const match = meetingFilterSpeaker && name !== meetingFilterSpeaker;
       const time = s.start.toFixed(1) + 's - ' + s.end.toFixed(1) + 's';
       const color = SPEAKER_COLORS[(s.speaker + 1) % SPEAKER_COLORS.length];
-      return '<div class="meeting-segment' + (match ? ' filtered-out' : '') + '" style="border-left-color:' + color + ';"><div class="speaker-label">' + name + ' <span class="seg-time">' + time + (s.confidence ? ' (' + (s.confidence*100).toFixed(0) + '%)' : '') + '</span></div><div>' + (s.transcript || '(no speech)') + '</div></div>';
+      const clusterConf = s.cluster_confidence ? 'c:' + (s.cluster_confidence*100).toFixed(0) + '%' : '';
+      const verifConf = s.confidence ? 'v:' + (s.confidence*100).toFixed(0) + '%' : '';
+      const confs = [clusterConf, verifConf].filter(Boolean).join(' ');
+      return '<div class="meeting-segment' + (match ? ' filtered-out' : '') + '" style="border-left-color:' + color + ';"><div class="speaker-label">' + name + ' <span class="seg-time">' + time + (confs ? ' (' + confs + ')' : '') + '</span></div><div>' + (s.transcript || '(no speech)') + '</div></div>';
     }).join('');
     meetingTranscript.innerHTML = html;
     if (data.summary) {
