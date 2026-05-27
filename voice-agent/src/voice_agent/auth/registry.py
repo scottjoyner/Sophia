@@ -15,3 +15,10 @@ class VoiceprintRegistry:
 
     def get(self, user_id: str) -> Dict[str, Any] | None:
         return self.db.fetch_voiceprint(user_id)
+
+    def sample_count(self, user_id: str) -> int:
+        record = self.get(user_id)
+        if not record:
+            return 0
+        samples = record.get("samples") or {}
+        return len(samples.get("samples") or [])
