@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hmac
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import List
@@ -10,7 +12,7 @@ from typing import List
 import numpy as np
 import uvicorn
 
-from .auth.enroll import enroll_from_files
+from .auth.enroll import EnrollmentError, enroll_from_files
 from .auth.verify import verify_audio_segment
 from .bench.replay_client import replay_wav
 from .bench.report import generate_report
@@ -25,6 +27,35 @@ def _load_config(path: str | None) -> AppConfig:
     return load_config(path)
 
 
+def _require_owner_override(config: AppConfig, user_id: str, token: str | None) -> None:
+    if user_id != config.auth.owner_user_id:
+        raise EnrollmentError(
+            f"Owner override can only enroll the configured owner user_id={config.auth.owner_user_id!r}; got {user_id!r}"
+        )
+    if not config.auth.owner_override_enabled:
+        raise EnrollmentError("Owner override enrollment is disabled. Set SOPHIA_OWNER_OVERRIDE_ENABLED=true.")
+    expected = config.auth.owner_override_token
+    if not expected:
+        raise EnrollmentError(
+            "Owner override token is not configured. Set SOPHIA_OWNER_OVERRIDE_TOKEN or SOPHIA_OWNER_OVERRIDE_TOKEN_FILE."
+        )
+    if not token or not hmac.compare_digest(str(token), str(expected)):
+        raise EnrollmentError("Invalid owner override token")
+
+
+def _files_from_args(args: argparse.Namespace) -> List[str]:
+    files: List[str] = []
+    if getattr(args, "audio_dir", None):
+        root = Path(args.audio_dir)
+        patterns = getattr(args, "glob", None) or ["*.wav"]
+        for pattern in patterns:
+            files.extend(str(p) for p in root.glob(pattern))
+    if getattr(args, "files", None):
+        files.extend(args.files)
+    # Preserve order but drop duplicates.
+    return list(dict.fromkeys(files))
+
+
 def cmd_serve(args: argparse.Namespace) -> None:
     config = _load_config(args.config)
     app = create_app(config)
@@ -36,15 +67,41 @@ def cmd_enroll(args: argparse.Namespace) -> None:
     files: List[str] = []
     if args.mic:
         files = _record_phrases(config, args.user, args.phrases, args.n)
-    elif args.audio_dir:
-        files = [str(p) for p in Path(args.audio_dir).glob("*.wav")]
-    elif args.files:
-        files = args.files
     else:
+        files = _files_from_args(args)
+    if not files:
         print("No audio files provided for enrollment", file=sys.stderr)
         sys.exit(1)
-    enroll_from_files(config, args.user, files)
-    print(f"Enrolled {args.user} with {len(files)} samples")
+    try:
+        result = enroll_from_files(config, args.user, files, append=args.append, source=args.source)
+    except EnrollmentError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps(result, indent=2))
+
+
+def cmd_owner_override_enroll(args: argparse.Namespace) -> None:
+    config = _load_config(args.config)
+    try:
+        _require_owner_override(config, args.user, args.override_token)
+        files = _files_from_args(args)
+        if args.mic:
+            files.extend(_record_phrases(config, args.user, args.phrases, args.n))
+        if not files:
+            raise EnrollmentError("No audio files provided for owner override enrollment")
+        result = enroll_from_files(
+            config,
+            args.user,
+            files,
+            append=True,
+            source=args.source,
+            min_seconds=config.auth.owner_append_min_seconds,
+            max_seconds=config.auth.owner_append_max_seconds,
+        )
+    except EnrollmentError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps({"ok": True, "override": "owner_token", **result}, indent=2))
 
 
 def cmd_verify(args: argparse.Namespace) -> None:
@@ -74,7 +131,6 @@ def cmd_mic(args: argparse.Namespace) -> None:
         sys.exit(1)
     import sounddevice as sd
     import websockets
-    import json
     from .util.audio import b64encode, float_to_pcm16_bytes
     from .util.time import now_ms
 
@@ -138,8 +194,8 @@ def cmd_report(args: argparse.Namespace) -> None:
 def cmd_ingest_dir(args: argparse.Namespace) -> None:
     config = _load_config(args.config)
     files = [str(p) for p in Path(args.audio_dir).glob("*.wav")]
-    enroll_from_files(config, args.user, files)
-    print(f"Ingested {len(files)} files for {args.user}")
+    result = enroll_from_files(config, args.user, files, append=args.append, source="ingest-dir")
+    print(json.dumps(result, indent=2))
 
 
 def cmd_ingest_auto_ingest(args: argparse.Namespace) -> None:
@@ -158,8 +214,14 @@ def cmd_ingest_auto_ingest(args: argparse.Namespace) -> None:
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)
-    enroll_from_files(config, args.user, files)
-    print(f"Ingested {len(files)} files from Neo4j for {args.user}")
+    result = enroll_from_files(config, args.user, files, append=args.append, source="neo4j")
+    print(json.dumps(result, indent=2))
+
+
+def _add_file_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--files", nargs="*", help="Explicit audio files to enroll")
+    parser.add_argument("--audio-dir", help="Directory of audio clips to enroll")
+    parser.add_argument("--glob", nargs="*", default=["*.wav"], help="Glob patterns under --audio-dir; default: *.wav")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -174,13 +236,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     enroll = sub.add_parser("enroll")
     enroll.add_argument("--user", required=True)
-    enroll.add_argument("--files", nargs="*")
-    enroll.add_argument("--audio-dir")
+    _add_file_args(enroll)
     enroll.add_argument("--mic", action="store_true")
     enroll.add_argument("--phrases", default="tests/fixtures/enroll_phrases.txt")
     enroll.add_argument("--n", type=int, default=3)
+    enroll.add_argument("--append", action="store_true", help="Append to the existing voiceprint instead of replacing it")
+    enroll.add_argument("--source", default="manual")
     enroll.add_argument("--config", default=None)
     enroll.set_defaults(func=cmd_enroll)
+
+    owner_enroll = sub.add_parser("owner-override-enroll")
+    owner_enroll.add_argument("--user", default="scott")
+    _add_file_args(owner_enroll)
+    owner_enroll.add_argument("--mic", action="store_true")
+    owner_enroll.add_argument("--phrases", default="tests/fixtures/enroll_phrases.txt")
+    owner_enroll.add_argument("--n", type=int, default=5)
+    owner_enroll.add_argument("--override-token", required=True)
+    owner_enroll.add_argument("--source", default="owner_override")
+    owner_enroll.add_argument("--config", default=None)
+    owner_enroll.set_defaults(func=cmd_owner_override_enroll)
 
     verify = sub.add_parser("verify")
     verify.add_argument("--user", required=True)
@@ -212,6 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_dir = sub.add_parser("ingest-dir")
     ingest_dir.add_argument("--user", required=True)
     ingest_dir.add_argument("--audio-dir", required=True)
+    ingest_dir.add_argument("--append", action="store_true")
     ingest_dir.add_argument("--config", default=None)
     ingest_dir.set_defaults(func=cmd_ingest_dir)
 
@@ -224,6 +299,7 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_auto.add_argument("--speaker-node-id")
     ingest_auto.add_argument("--speaker-name")
     ingest_auto.add_argument("--limit", type=int, default=200)
+    ingest_auto.add_argument("--append", action="store_true")
     ingest_auto.add_argument("--config", default=None)
     ingest_auto.set_defaults(func=cmd_ingest_auto_ingest)
 
