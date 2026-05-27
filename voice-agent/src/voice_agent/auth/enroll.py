@@ -62,6 +62,7 @@ def enroll_from_files(
     embeddings: List[List[float]] = []
     samples_meta: List[Dict[str, Any]] = []
     errors: List[Dict[str, str]] = []
+    legacy_mean_preserved = False
 
     # Preserve existing sample weights by replaying stored per-sample embeddings when available.
     for sample in existing_samples:
@@ -69,6 +70,14 @@ def enroll_from_files(
         if isinstance(embedding, list) and embedding:
             embeddings.append(embedding)
             samples_meta.append(sample)
+
+    # Older voiceprints did not store per-sample embeddings. Keep the old mean as a
+    # single legacy prior so the first append does not accidentally discard the
+    # current known voiceprint while adding recovery clips.
+    if existing and not embeddings and isinstance(existing.get("embedding"), list) and existing.get("embedding"):
+        embeddings.append(existing["embedding"])
+        samples_meta.extend(existing_samples)
+        legacy_mean_preserved = True
 
     for path in files:
         try:
@@ -105,6 +114,7 @@ def enroll_from_files(
         "source": source,
         "updated_ts_ms": now_ms(),
         "errors": errors,
+        "legacy_mean_preserved": legacy_mean_preserved,
     }
     registry.save(user_id, embedding_mean, metadata, config.auth.threshold)
     return {
@@ -114,5 +124,6 @@ def enroll_from_files(
         "new_files_failed": len(errors),
         "appended": append,
         "threshold": config.auth.threshold,
+        "legacy_mean_preserved": legacy_mean_preserved,
         "errors": errors,
     }
