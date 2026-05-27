@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import uuid
 from pathlib import Path
@@ -9,7 +10,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, Web
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from ..auth.enroll import enroll_from_files
+from ..auth.enroll import EnrollmentError, enroll_from_files
 from ..auth.neo4j_ingest import collect_audio_paths_from_neo4j, save_capture_to_neo4j
 from ..config import AppConfig, load_config
 from ..llm.intent import detect_voice_intent, intent_from_model_payload
@@ -66,6 +67,7 @@ CAPTURE_PAGE = """<!doctype html>
     button { border: 0; border-radius: 8px; padding: 14px 12px; font: inherit; font-weight: 700; color: #061014; background: #7dd3fc; min-height: 52px; }
     button.secondary { background: #253140; color: #e5edf7; }
     button.danger { background: #fb7185; color: #23060a; }
+    button.warn { background: #fbbf24; color: #1f1300; }
     button:disabled { opacity: .45; }
     .fallback { display: none; margin-top: 12px; }
     .fallback.active { display: block; }
@@ -74,6 +76,7 @@ CAPTURE_PAGE = """<!doctype html>
     .meter > div { height: 100%; width: 0%; background: #34d399; transition: width .12s linear; }
     audio { width: 100%; margin-top: 12px; }
     pre { overflow: auto; max-height: 220px; background: #071019; border: 1px solid #253140; border-radius: 8px; padding: 10px; color: #cbd5e1; }
+    .hint { color: #9aa7b6; font-size: 13px; line-height: 1.4; margin-top: 8px; }
     @media (max-width: 520px) { .row, .controls { grid-template-columns: 1fr; } header { display: block; } .pill { display: inline-block; margin-top: 12px; } }
   </style>
 </head>
@@ -82,7 +85,7 @@ CAPTURE_PAGE = """<!doctype html>
   <header>
     <div>
       <h1>Sophia</h1>
-      <div class="sub">Mobile recorder, transcript capture, and memory graph ingest.</div>
+      <div class="sub">Mobile recorder, transcript capture, memory graph ingest, and owner voiceprint recovery.</div>
     </div>
     <div id="graph" class="pill">checking graph...</div>
   </header>
@@ -124,7 +127,18 @@ CAPTURE_PAGE = """<!doctype html>
   </section>
 
   <section>
-    <label>Latest capture</label>
+    <label for="adminKey">Admin voiceprint enrollment key</label>
+    <input id="adminKey" type="password" autocomplete="off" placeholder="Required only for admin voiceprint enrollment">
+    <div class="hint">Use this only for reviewed Scott-only clips. Live browser recordings are converted to WAV before enrollment; uploaded WAV files are preferred when available.</div>
+    <div class="controls">
+      <button id="voiceprintBtn" class="warn" disabled>Append this clip to owner voiceprint</button>
+      <button id="clearKeyBtn" class="secondary">Clear key</button>
+    </div>
+    <div id="voiceprintStatus" class="status"></div>
+  </section>
+
+  <section>
+    <label>Latest capture / voiceprint action</label>
     <pre id="latest">{}</pre>
   </section>
 </main>
@@ -146,9 +160,14 @@ CAPTURE_PAGE = """<!doctype html>
   const activityContext = document.getElementById('activityContext');
   const fallback = document.getElementById('fallback');
   const audioFile = document.getElementById('audioFile');
+  const adminKey = document.getElementById('adminKey');
+  const voiceprintBtn = document.getElementById('voiceprintBtn');
+  const clearKeyBtn = document.getElementById('clearKeyBtn');
+  const voiceprintStatus = document.getElementById('voiceprintStatus');
 
   let recorder, stream, chunks = [], blob = null, selectedFile = null, startedAt = 0, recognition = null;
-  let audioCtx, analyser, raf;
+  let audioCtx, analyser, raf, wavSource, wavProcessor, wavGain;
+  let wavBuffers = [], wavSampleRate = 0, wavBlob = null;
   let cachedContext = null;
 
   function getDeviceId() {
@@ -220,8 +239,8 @@ CAPTURE_PAGE = """<!doctype html>
   async function refreshGraph() {
     try {
       const res = await fetch('/memory-graph/status');
-    const data = await res.json();
-    graph.textContent = data.has_password ? 'graph connected: ' + (data.database || 'default') : 'graph needs credentials';
+      const data = await res.json();
+      graph.textContent = data.has_password ? 'graph connected: ' + (data.database || 'default') : 'graph needs credentials';
     } catch {
       graph.textContent = 'graph unavailable';
     }
@@ -236,6 +255,12 @@ CAPTURE_PAGE = """<!doctype html>
     startBtn.disabled = true;
     stopBtn.disabled = true;
     if (message) statusEl.textContent = message;
+  }
+
+  function updateActionButtons() {
+    const hasAudio = Boolean(blob || selectedFile || wavBlob);
+    saveBtn.disabled = !hasAudio && !transcriptEl.value.trim();
+    voiceprintBtn.disabled = !hasAudio;
   }
 
   function makeRecognition() {
@@ -254,7 +279,7 @@ CAPTURE_PAGE = """<!doctype html>
         else interim += text;
       }
       transcriptEl.value = (finalText + interim).trim();
-      saveBtn.disabled = !blob && !selectedFile && !transcriptEl.value.trim();
+      updateActionButtons();
     };
     rec.onerror = () => { statusEl.textContent = 'Browser transcription paused; audio is still recording.'; };
     return rec;
@@ -276,25 +301,87 @@ CAPTURE_PAGE = """<!doctype html>
     tick();
   }
 
+  function startWavCapture(inputStream) {
+    if (!audioCtx) return;
+    wavBuffers = [];
+    wavBlob = null;
+    wavSampleRate = audioCtx.sampleRate;
+    wavSource = audioCtx.createMediaStreamSource(inputStream);
+    wavProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+    wavGain = audioCtx.createGain();
+    wavGain.gain.value = 0;
+    wavProcessor.onaudioprocess = (event) => {
+      const input = event.inputBuffer.getChannelData(0);
+      wavBuffers.push(new Float32Array(input));
+    };
+    wavSource.connect(wavProcessor);
+    wavProcessor.connect(wavGain);
+    wavGain.connect(audioCtx.destination);
+  }
+
+  function stopWavCapture() {
+    try { wavProcessor && wavProcessor.disconnect(); } catch {}
+    try { wavSource && wavSource.disconnect(); } catch {}
+    try { wavGain && wavGain.disconnect(); } catch {}
+    wavProcessor = null;
+    wavSource = null;
+    wavGain = null;
+    if (wavBuffers.length && wavSampleRate) wavBlob = encodeWav(wavBuffers, wavSampleRate);
+  }
+
+  function encodeWav(buffers, sampleRate) {
+    const length = buffers.reduce((total, buf) => total + buf.length, 0);
+    const samples = new Float32Array(length);
+    let offset = 0;
+    buffers.forEach(buf => { samples.set(buf, offset); offset += buf.length; });
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+    function writeString(pos, value) {
+      for (let i = 0; i < value.length; i++) view.setUint8(pos + i, value.charCodeAt(i));
+    }
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+    let pos = 44;
+    for (let i = 0; i < samples.length; i++, pos += 2) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(pos, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    return new Blob([view], { type: 'audio/wav' });
+  }
+
   async function start() {
     chunks = [];
     blob = null;
     selectedFile = null;
-    saveBtn.disabled = true;
+    wavBlob = null;
+    updateActionButtons();
     saveStatus.textContent = '';
+    voiceprintStatus.textContent = '';
     if (!hasLiveMic()) {
       enableFallback('Live microphone recording needs HTTPS on iOS Safari. Use the audio file picker below to record or upload.');
       return;
     }
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     startMeter(stream);
+    startWavCapture(stream);
     recorder = new MediaRecorder(stream);
     recorder.ondataavailable = (ev) => { if (ev.data.size) chunks.push(ev.data); };
     recorder.onstop = () => {
       blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
       preview.src = URL.createObjectURL(blob);
       preview.hidden = false;
-      saveBtn.disabled = false;
+      updateActionButtons();
     };
     recognition = makeRecognition();
     try { recognition && recognition.start(); } catch {}
@@ -308,13 +395,15 @@ CAPTURE_PAGE = """<!doctype html>
   function stop() {
     if (recorder && recorder.state !== 'inactive') recorder.stop();
     if (recognition) { try { recognition.stop(); } catch {} }
+    stopWavCapture();
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (raf) cancelAnimationFrame(raf);
     if (audioCtx) audioCtx.close();
     levelEl.style.width = '0%';
     startBtn.disabled = false;
     stopBtn.disabled = true;
-    statusEl.textContent = 'Recording stopped. Review transcript, then save.';
+    updateActionButtons();
+    statusEl.textContent = 'Recording stopped. Review transcript, then save or append to voiceprint.';
   }
 
   async function save() {
@@ -341,22 +430,53 @@ CAPTURE_PAGE = """<!doctype html>
     saveStatus.textContent = data.graph_saved ? 'Saved to sidecar and Neo4j.' : 'Saved locally; graph not written.';
   }
 
+  async function appendVoiceprint() {
+    const key = adminKey.value || '';
+    if (!key.trim()) throw new Error('Admin enrollment key is required.');
+    const form = new FormData();
+    if (selectedFile) form.append('audio', selectedFile, selectedFile.name || 'owner-admin-upload.wav');
+    else if (wavBlob) form.append('audio', wavBlob, 'owner-admin-recording.wav');
+    else if (blob) form.append('audio', blob, 'owner-admin-recording.webm');
+    else throw new Error('Record or upload an audio clip first.');
+    form.append('user_id', userId.value || 'scott');
+    form.append('session_id', sessionId.value || 'mobile');
+    form.append('admin_key', key);
+    form.append('transcript', transcriptEl.value || '');
+    form.append('activity_context', activityContext.value || '');
+    const context = cachedContext || await collectContext();
+    form.append('device_id', context.device_id || '');
+    form.append('device_fingerprint', context.device_fingerprint || '');
+    form.append('client_context', JSON.stringify(context));
+    voiceprintStatus.textContent = 'Appending voiceprint sample...';
+    const res = await fetch('/voiceprints/owner-override-enroll', { method: 'POST', body: form });
+    const data = await res.json();
+    latest.textContent = JSON.stringify(data, null, 2);
+    if (!res.ok) throw new Error(data.detail || 'Voiceprint append failed');
+    voiceprintStatus.textContent = 'Voiceprint updated. Run a held-out verification clip next.';
+  }
+
   startBtn.onclick = () => start().catch(err => {
     enableFallback('Microphone unavailable here: ' + (err && err.message ? err.message : 'browser blocked live capture'));
   });
   stopBtn.onclick = stop;
   saveBtn.onclick = () => save().catch(err => { saveStatus.textContent = err.message; });
-  transcriptEl.oninput = () => { saveBtn.disabled = !blob && !selectedFile && !transcriptEl.value.trim(); };
+  voiceprintBtn.onclick = () => appendVoiceprint().catch(err => { voiceprintStatus.textContent = err.message; });
+  transcriptEl.oninput = updateActionButtons;
   audioFile.onchange = () => {
     selectedFile = audioFile.files && audioFile.files[0] ? audioFile.files[0] : null;
     blob = null;
+    wavBlob = null;
     if (selectedFile) {
       preview.src = URL.createObjectURL(selectedFile);
       preview.hidden = false;
-      saveBtn.disabled = false;
+      updateActionButtons();
       startedAt = Date.now();
-      statusEl.textContent = 'Audio selected. Add or edit transcript, then save.';
+      statusEl.textContent = 'Audio selected. Add or edit transcript, then save or append to voiceprint.';
     }
+  };
+  clearKeyBtn.onclick = () => {
+    adminKey.value = '';
+    voiceprintStatus.textContent = '';
   };
   clearBtn.onclick = () => {
     transcriptEl.value = '';
@@ -364,8 +484,9 @@ CAPTURE_PAGE = """<!doctype html>
     preview.hidden = true;
     blob = null;
     selectedFile = null;
+    wavBlob = null;
     audioFile.value = '';
-    saveBtn.disabled = true;
+    updateActionButtons();
     latest.textContent = '{}';
   };
   if (!hasLiveMic()) {
@@ -374,11 +495,32 @@ CAPTURE_PAGE = """<!doctype html>
       : 'Live recording needs HTTPS on iOS Safari. Use the upload fallback, or open the HTTPS endpoint when enabled.');
   }
   refreshGraph();
+  updateActionButtons();
 })();
 </script>
 </body>
 </html>
 """
+
+
+def _require_owner_override(config: AppConfig, user_id: str, admin_key: str | None) -> None:
+    if user_id != config.auth.owner_user_id:
+        raise HTTPException(status_code=403, detail="Owner override can only enroll the configured owner user.")
+    if not config.auth.owner_override_enabled:
+        raise HTTPException(status_code=403, detail="Owner override enrollment is disabled on this deployment.")
+    expected = config.auth.owner_override_token
+    if not expected:
+        raise HTTPException(status_code=503, detail="Admin enrollment key is not configured on this deployment.")
+    if not admin_key or not hmac.compare_digest(str(admin_key), str(expected)):
+        raise HTTPException(status_code=403, detail="Invalid admin enrollment key.")
+
+
+def _safe_upload_suffix(upload: UploadFile, default: str = ".wav") -> str:
+    if upload.filename and "." in upload.filename:
+        suffix = "." + upload.filename.rsplit(".", 1)[-1].lower()
+        if 1 < len(suffix) <= 12:
+            return suffix
+    return default
 
 
 def create_app(config: AppConfig) -> FastAPI:
@@ -514,6 +656,13 @@ def create_app(config: AppConfig) -> FastAPI:
                 "has_password": bool(config.neo4j.password),
                 "default_speaker_name": config.neo4j.default_speaker_name,
             },
+            "voiceprint_override": {
+                "owner_user_id": config.auth.owner_user_id,
+                "enabled": config.auth.owner_override_enabled,
+                "key_configured": bool(config.auth.owner_override_token),
+                "min_seconds": config.auth.owner_append_min_seconds,
+                "max_seconds": config.auth.owner_append_max_seconds,
+            },
             "capture_dir": config.paths.capture_dir or str(Path(config.paths.artifacts_dir) / "captures"),
         }
 
@@ -591,9 +740,7 @@ def create_app(config: AppConfig) -> FastAPI:
         audio_path = ""
         byte_count = 0
         if audio is not None:
-            suffix = ".webm"
-            if audio.filename and "." in audio.filename:
-                suffix = "." + audio.filename.rsplit(".", 1)[-1].lower()
+            suffix = _safe_upload_suffix(audio, default=".webm")
             audio_file = captures_dir / f"{capture_id}{suffix}"
             data = await audio.read()
             audio_file.write_bytes(data)
@@ -659,6 +806,69 @@ def create_app(config: AppConfig) -> FastAPI:
             "ts_ms": now_ms(),
         }
         bus.publish("mobile_capture_saved", payload)
+        return {"ok": True, **payload}
+
+    @app.post("/voiceprints/owner-override-enroll")
+    async def owner_override_enroll(
+        request: Request,
+        audio: UploadFile = File(...),
+        user_id: str = Form(default="scott"),
+        session_id: str = Form(default="mobile"),
+        admin_key: str = Form(default=""),
+        transcript: str = Form(default=""),
+        device_id: str = Form(default=""),
+        device_fingerprint: str = Form(default=""),
+        client_context: str = Form(default=""),
+        activity_context: str = Form(default=""),
+    ) -> Dict[str, Any]:
+        _require_owner_override(config, user_id, admin_key)
+        capture_id = uuid.uuid4().hex
+        override_dir = Path(config.paths.capture_dir or (Path(config.paths.artifacts_dir) / "captures")) / "voiceprint_override"
+        override_dir.mkdir(parents=True, exist_ok=True)
+        suffix = _safe_upload_suffix(audio, default=".wav")
+        audio_file = override_dir / f"{capture_id}{suffix}"
+        data = await audio.read()
+        audio_file.write_bytes(data)
+        detected = _detect_intent(transcript) if transcript.strip() else None
+        context = _capture_context(
+            request,
+            client_context=client_context,
+            device_id=device_id,
+            device_fingerprint=device_fingerprint,
+            location_lat="",
+            location_lng="",
+            location_accuracy_m="",
+            activity_context=activity_context,
+            detected=detected,
+        )
+        try:
+            result = enroll_from_files(
+                config,
+                user_id,
+                [str(audio_file)],
+                append=True,
+                source="ui_owner_override",
+                min_seconds=config.auth.owner_append_min_seconds,
+                max_seconds=config.auth.owner_append_max_seconds,
+            )
+        except EnrollmentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+        payload = {
+            "session_id": session_id,
+            "user_id": user_id,
+            "capture_id": capture_id,
+            "audio_path": str(audio_file),
+            "bytes": len(data),
+            "content_type": audio.content_type,
+            "device_id": context.get("device_id"),
+            "device_fingerprint": context.get("device_fingerprint"),
+            "source": "ui_owner_override",
+            "ts_ms": now_ms(),
+            **result,
+        }
+        bus.publish("voiceprint_owner_override_enrolled", payload)
         return {"ok": True, **payload}
 
     @app.post("/voiceprints/train-neo4j")
