@@ -12,6 +12,12 @@ class AuthConfig(BaseModel):
     threshold: float = 0.75
     require_challenge: bool = False
     challenge_phrases_file: Optional[str] = None
+    owner_user_id: str = "scott"
+    owner_override_enabled: bool = False
+    owner_override_token: Optional[str] = None
+    owner_override_token_file: Optional[str] = None
+    owner_append_min_seconds: float = 2.0
+    owner_append_max_seconds: float = 30.0
 
 
 class STTConfig(BaseModel):
@@ -97,6 +103,16 @@ def load_config(path: Optional[str]) -> AppConfig:
     return _apply_env(AppConfig.model_validate(data or {}))
 
 
+def _read_secret_file(path: str | None) -> str | None:
+    if not path:
+        return None
+    secret_path = Path(path).expanduser()
+    if not secret_path.exists():
+        return None
+    value = secret_path.read_text(encoding="utf-8").strip()
+    return value or None
+
+
 def _apply_env(config: AppConfig) -> AppConfig:
     update = {}
     if os.getenv("NEO4J_URI"):
@@ -124,4 +140,29 @@ def _apply_env(config: AppConfig) -> AppConfig:
         llm_update["intent_model"] = os.environ["SOPHIA_INTENT_MODEL"]
     if llm_update:
         config.llm = config.llm.model_copy(update=llm_update)
+
+    auth_update = {}
+    if os.getenv("SOPHIA_OWNER_USER_ID"):
+        auth_update["owner_user_id"] = os.environ["SOPHIA_OWNER_USER_ID"]
+    if os.getenv("SOPHIA_OWNER_OVERRIDE_ENABLED"):
+        auth_update["owner_override_enabled"] = os.environ["SOPHIA_OWNER_OVERRIDE_ENABLED"].lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    if os.getenv("SOPHIA_OWNER_OVERRIDE_TOKEN"):
+        auth_update["owner_override_token"] = os.environ["SOPHIA_OWNER_OVERRIDE_TOKEN"]
+    if os.getenv("SOPHIA_OWNER_OVERRIDE_TOKEN_FILE"):
+        auth_update["owner_override_token_file"] = os.environ["SOPHIA_OWNER_OVERRIDE_TOKEN_FILE"]
+    if os.getenv("SOPHIA_OWNER_APPEND_MIN_SECONDS"):
+        auth_update["owner_append_min_seconds"] = float(os.environ["SOPHIA_OWNER_APPEND_MIN_SECONDS"])
+    if os.getenv("SOPHIA_OWNER_APPEND_MAX_SECONDS"):
+        auth_update["owner_append_max_seconds"] = float(os.environ["SOPHIA_OWNER_APPEND_MAX_SECONDS"])
+    if auth_update:
+        config.auth = config.auth.model_copy(update=auth_update)
+    if config.auth.owner_override_token is None and config.auth.owner_override_token_file:
+        token = _read_secret_file(config.auth.owner_override_token_file)
+        if token:
+            config.auth = config.auth.model_copy(update={"owner_override_token": token})
     return config
