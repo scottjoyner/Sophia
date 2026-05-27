@@ -16,6 +16,7 @@ class VoiceprintRegistry:
     def get(self, user_id: str) -> Dict[str, Any] | None:
         return self.db.fetch_voiceprint(user_id)
 
+<<<<<<< HEAD
     def save_device(self, user_id: str, device_id: str, embedding_mean: Iterable[float], samples: Dict[str, Any], threshold: float) -> None:
         self.db.save_device_voiceprint(user_id, device_id, embedding_mean, samples, threshold)
 
@@ -46,3 +47,11 @@ class VoiceprintRegistry:
         for device_id, record in devices.items():
             result.append({"device_id": device_id, **record})
         return result
+=======
+    def sample_count(self, user_id: str) -> int:
+        record = self.get(user_id)
+        if not record:
+            return 0
+        samples = record.get("samples") or {}
+        return len(samples.get("samples") or [])
+>>>>>>> 4caa783d8510f01247862aecb521c50c82cd9f9c

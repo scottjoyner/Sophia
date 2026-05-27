@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import asyncio
 import json
 import uuid
@@ -11,7 +12,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, Web
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from ..auth.enroll import enroll_from_files
+from ..auth.enroll import EnrollmentError, enroll_from_files
 from ..auth.neo4j_ingest import collect_audio_paths_from_neo4j, save_capture_to_neo4j
 from ..auth.diarization import diarize, identify_speakers
 from ..auth.verify import verify_audio_segment
@@ -100,6 +101,7 @@ CAPTURE_PAGE = """<!doctype html>
     button.primary { background: #7dd3fc; color: #061014; }
     button.primary:hover:not(:disabled) { background: #67c5f0; }
     button.danger { background: #fb7185; color: #23060a; }
+    button.warn { background: #fbbf24; color: #1f1300; }
     button.danger:hover:not(:disabled) { background: #f05e73; }
     button.secondary { background: #1e293b; color: #e2e8f0; }
     button.secondary:hover:not(:disabled) { background: #29394f; }
@@ -147,6 +149,13 @@ CAPTURE_PAGE = """<!doctype html>
     .dispatch-entry .de-error { color: #fb7185; font-size: 11px; }
     select { width: 100%; border: 1px solid #334155; border-radius: 8px; background: #071019; color: #f8fafc; padding: 10px 12px; font: inherit; font-size: 14px; }
     @media (max-width: 520px) { .row { grid-template-columns: 1fr; } .controls { grid-template-columns: 1fr; } .btn-group { flex-direction: column; } button { width: 100%; } header { flex-direction: column; align-items: stretch; } }
+    .status { min-height: 22px; color: #9aa7b6; font-size: 14px; margin-top: 10px; }
+    .meter { height: 10px; border-radius: 999px; background: #1f2937; overflow: hidden; margin-top: 10px; }
+    .meter > div { height: 100%; width: 0%; background: #34d399; transition: width .12s linear; }
+    audio { width: 100%; margin-top: 12px; }
+    pre { overflow: auto; max-height: 220px; background: #071019; border: 1px solid #253140; border-radius: 8px; padding: 10px; color: #cbd5e1; }
+    .hint { color: #9aa7b6; font-size: 13px; line-height: 1.4; margin-top: 8px; }
+    @media (max-width: 520px) { .row, .controls { grid-template-columns: 1fr; } header { display: block; } .pill { display: inline-block; margin-top: 12px; } }
   </style>
 </head>
 <body>
@@ -154,6 +163,7 @@ CAPTURE_PAGE = """<!doctype html>
   <header>
     <div class="logo">
       <h1>Sophia</h1>
+      <div class="sub">Mobile recorder, transcript capture, memory graph ingest, and owner voiceprint recovery.</div>
     </div>
     <div class="status-bar">
       <div id="graph" class="pill graph">graph ...</div>
@@ -253,7 +263,18 @@ CAPTURE_PAGE = """<!doctype html>
   </section>
 
   <section>
-    <h2>&#x1F4CB; Latest Response</h2>
+    <label for="adminKey">Admin voiceprint enrollment key</label>
+    <input id="adminKey" type="password" autocomplete="off" placeholder="Required only for admin voiceprint enrollment">
+    <div class="hint">Use this only for reviewed Scott-only clips. Live browser recordings are converted to WAV before enrollment; uploaded WAV files are preferred when available.</div>
+    <div class="controls">
+      <button id="voiceprintBtn" class="warn" disabled>Append this clip to owner voiceprint</button>
+      <button id="clearKeyBtn" class="secondary">Clear key</button>
+    </div>
+    <div id="voiceprintStatus" class="status"></div>
+  </section>
+
+  <section>
+    <label>Latest capture / voiceprint action</label>
     <pre id="latest">{}</pre>
   </section>
   <section>
@@ -396,6 +417,10 @@ CAPTURE_PAGE = """<!doctype html>
   const activityContext = document.getElementById('activityContext');
   const fallback = document.getElementById('fallback');
   const audioFile = document.getElementById('audioFile');
+  const adminKey = document.getElementById('adminKey');
+  const voiceprintBtn = document.getElementById('voiceprintBtn');
+  const clearKeyBtn = document.getElementById('clearKeyBtn');
+  const voiceprintStatus = document.getElementById('voiceprintStatus');
   const agentModeBtn = document.getElementById('agentModeBtn');
   const meetingModeBtn = document.getElementById('meetingModeBtn');
   const agentMode = document.getElementById('agentMode');
@@ -434,7 +459,8 @@ CAPTURE_PAGE = """<!doctype html>
   let lastScore = null, lastAccepted = null;
 
   let recorder, stream, chunks = [], blob = null, selectedFile = null, startedAt = 0, recognition = null;
-  let audioCtx, analyser, raf;
+  let audioCtx, analyser, raf, wavSource, wavProcessor, wavGain;
+  let wavBuffers = [], wavSampleRate = 0, wavBlob = null;
   let cachedContext = null;
   let lastAuthResult = null, lastMeetingResult = null;
 
@@ -507,8 +533,8 @@ CAPTURE_PAGE = """<!doctype html>
   async function refreshGraph() {
     try {
       const res = await fetch('/memory-graph/status');
-    const data = await res.json();
-    graph.textContent = data.has_password ? 'graph connected: ' + (data.database || 'default') : 'graph needs credentials';
+      const data = await res.json();
+      graph.textContent = data.has_password ? 'graph connected: ' + (data.database || 'default') : 'graph needs credentials';
     } catch {
       graph.textContent = 'graph unavailable';
     }
@@ -658,6 +684,12 @@ CAPTURE_PAGE = """<!doctype html>
     if (message) statusEl.textContent = message;
   }
 
+  function updateActionButtons() {
+    const hasAudio = Boolean(blob || selectedFile || wavBlob);
+    saveBtn.disabled = !hasAudio && !transcriptEl.value.trim();
+    voiceprintBtn.disabled = !hasAudio;
+  }
+
   function makeRecognition() {
     const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Ctor) return null;
@@ -674,7 +706,7 @@ CAPTURE_PAGE = """<!doctype html>
         else interim += text;
       }
       transcriptEl.value = (finalText + interim).trim();
-      saveBtn.disabled = !blob && !selectedFile && !transcriptEl.value.trim();
+      updateActionButtons();
     };
     rec.onerror = () => { statusEl.textContent = 'Browser transcription paused; audio is still recording.'; };
     return rec;
@@ -696,30 +728,86 @@ CAPTURE_PAGE = """<!doctype html>
     tick();
   }
 
+  function startWavCapture(inputStream) {
+    if (!audioCtx) return;
+    wavBuffers = [];
+    wavBlob = null;
+    wavSampleRate = audioCtx.sampleRate;
+    wavSource = audioCtx.createMediaStreamSource(inputStream);
+    wavProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+    wavGain = audioCtx.createGain();
+    wavGain.gain.value = 0;
+    wavProcessor.onaudioprocess = (event) => {
+      const input = event.inputBuffer.getChannelData(0);
+      wavBuffers.push(new Float32Array(input));
+    };
+    wavSource.connect(wavProcessor);
+    wavProcessor.connect(wavGain);
+    wavGain.connect(audioCtx.destination);
+  }
+
+  function stopWavCapture() {
+    try { wavProcessor && wavProcessor.disconnect(); } catch {}
+    try { wavSource && wavSource.disconnect(); } catch {}
+    try { wavGain && wavGain.disconnect(); } catch {}
+    wavProcessor = null;
+    wavSource = null;
+    wavGain = null;
+    if (wavBuffers.length && wavSampleRate) wavBlob = encodeWav(wavBuffers, wavSampleRate);
+  }
+
+  function encodeWav(buffers, sampleRate) {
+    const length = buffers.reduce((total, buf) => total + buf.length, 0);
+    const samples = new Float32Array(length);
+    let offset = 0;
+    buffers.forEach(buf => { samples.set(buf, offset); offset += buf.length; });
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+    function writeString(pos, value) {
+      for (let i = 0; i < value.length; i++) view.setUint8(pos + i, value.charCodeAt(i));
+    }
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+    let pos = 44;
+    for (let i = 0; i < samples.length; i++, pos += 2) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(pos, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    return new Blob([view], { type: 'audio/wav' });
+  }
+
   async function start() {
     chunks = [];
     blob = null;
     selectedFile = null;
-    saveBtn.disabled = true;
+    wavBlob = null;
+    updateActionButtons();
     saveStatus.textContent = '';
-    authResult.classList.add('hidden');
     if (!hasLiveMic()) {
       enableFallback('Live microphone recording needs HTTPS on iOS Safari. Use the audio file picker below to record or upload.');
       return;
     }
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     startMeter(stream);
+    startWavCapture(stream);
     recorder = new MediaRecorder(stream);
     recorder.ondataavailable = (ev) => { if (ev.data.size) chunks.push(ev.data); };
     recorder.onstop = () => {
       blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
       preview.src = URL.createObjectURL(blob);
       preview.hidden = false;
-      saveBtn.disabled = false;
-      verifyBtn.disabled = false;
-      enrollBtn.disabled = true;
-      authResult.classList.add('hidden');
-      statusEl.textContent = 'Recording stopped. Verify your voice, then enroll or save.';
+      updateActionButtons();
     };
     recognition = makeRecognition();
     try { recognition && recognition.start(); } catch {}
@@ -733,13 +821,15 @@ CAPTURE_PAGE = """<!doctype html>
   function stop() {
     if (recorder && recorder.state !== 'inactive') recorder.stop();
     if (recognition) { try { recognition.stop(); } catch {} }
+    stopWavCapture();
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (raf) cancelAnimationFrame(raf);
     if (audioCtx) audioCtx.close();
     levelEl.style.width = '0%';
     startBtn.disabled = false;
     stopBtn.disabled = true;
-    statusEl.textContent = 'Recording stopped. Review transcript, then save.';
+    updateActionButtons();
+    statusEl.textContent = 'Recording stopped. Review transcript, then save or append to voiceprint.';
   }
 
   async function save() {
@@ -769,27 +859,58 @@ CAPTURE_PAGE = """<!doctype html>
     saveStatus.textContent = data.graph_saved ? 'Saved to sidecar and Neo4j.' : 'Saved locally; graph not written.';
   }
 
+  async function appendVoiceprint() {
+    const key = adminKey.value || '';
+    if (!key.trim()) throw new Error('Admin enrollment key is required.');
+    const form = new FormData();
+    if (selectedFile) form.append('audio', selectedFile, selectedFile.name || 'owner-admin-upload.wav');
+    else if (wavBlob) form.append('audio', wavBlob, 'owner-admin-recording.wav');
+    else if (blob) form.append('audio', blob, 'owner-admin-recording.webm');
+    else throw new Error('Record or upload an audio clip first.');
+    form.append('user_id', userId.value || 'scott');
+    form.append('session_id', sessionId.value || 'mobile');
+    form.append('admin_key', key);
+    form.append('transcript', transcriptEl.value || '');
+    form.append('activity_context', activityContext.value || '');
+    const context = cachedContext || await collectContext();
+    form.append('device_id', context.device_id || '');
+    form.append('device_fingerprint', context.device_fingerprint || '');
+    form.append('client_context', JSON.stringify(context));
+    voiceprintStatus.textContent = 'Appending voiceprint sample...';
+    const res = await fetch('/voiceprints/owner-override-enroll', { method: 'POST', body: form });
+    const data = await res.json();
+    latest.textContent = JSON.stringify(data, null, 2);
+    if (!res.ok) throw new Error(data.detail || 'Voiceprint append failed');
+    voiceprintStatus.textContent = 'Voiceprint updated. Run a held-out verification clip next.';
+  }
+
   startBtn.onclick = () => start().catch(err => {
     enableFallback('Microphone unavailable here: ' + (err && err.message ? err.message : 'browser blocked live capture'));
   });
   stopBtn.onclick = stop;
   saveBtn.onclick = () => save().catch(err => { saveStatus.textContent = err.message; });
+  voiceprintBtn.onclick = () => appendVoiceprint().catch(err => { voiceprintStatus.textContent = err.message; });
   verifyBtn.onclick = () => verifyVoice();
   enrollBtn.onclick = () => enrollVoice();
-  transcriptEl.oninput = () => { saveBtn.disabled = !blob && !selectedFile && !transcriptEl.value.trim(); };
+  transcriptEl.oninput = updateActionButtons;
   audioFile.onchange = () => {
     selectedFile = audioFile.files && audioFile.files[0] ? audioFile.files[0] : null;
     blob = null;
+    wavBlob = null;
     if (selectedFile) {
       preview.src = URL.createObjectURL(selectedFile);
       preview.hidden = false;
-      saveBtn.disabled = false;
+      updateActionButtons();
       verifyBtn.disabled = false;
       enrollBtn.disabled = true;
       authResult.classList.add('hidden');
       startedAt = Date.now();
-      statusEl.textContent = 'Audio selected. Add or edit transcript, then save.';
+      statusEl.textContent = 'Audio selected. Add or edit transcript, then save or append to voiceprint.';
     }
+  };
+  clearKeyBtn.onclick = () => {
+    adminKey.value = '';
+    voiceprintStatus.textContent = '';
   };
   clearBtn.onclick = () => {
     transcriptEl.value = '';
@@ -797,8 +918,9 @@ CAPTURE_PAGE = """<!doctype html>
     preview.hidden = true;
     blob = null;
     selectedFile = null;
+    wavBlob = null;
     audioFile.value = '';
-    saveBtn.disabled = true;
+    updateActionButtons();
     verifyBtn.disabled = true;
     enrollBtn.disabled = true;
     authResult.classList.add('hidden');
@@ -1241,9 +1363,7 @@ CAPTURE_PAGE = """<!doctype html>
   if (savedCount > 0) captureCount.textContent = savedCount + ' capture' + (savedCount !== 1 ? 's' : '') + ' saved';
   loadSpeakers();
   refreshGraph();
-  refreshEventLog();
-  refreshStatus();
-  setInterval(refreshEventLog, 5000);
+  updateActionButtons();
 })();
 </script>
 </body>
@@ -1251,168 +1371,24 @@ CAPTURE_PAGE = """<!doctype html>
 """
 
 
-class MeetingTaskManager:
-    def __init__(self):
-        self._tasks: Dict[str, Dict[str, Any]] = {}
-
-    def create(self, task_id: str) -> None:
-        self._tasks[task_id] = {
-            "task_id": task_id,
-            "status": "queued",
-            "progress_pct": 0,
-            "step": "queued",
-            "result": None,
-            "error": None,
-        }
-
-    def update(self, task_id: str, status: str, step: str, pct: int, result: Any = None, error: str | None = None) -> None:
-        t = self._tasks.get(task_id)
-        if t is None:
-            return
-        t["status"] = status
-        t["step"] = step
-        t["progress_pct"] = pct
-        if result is not None:
-            t["result"] = result
-        if error is not None:
-            t["error"] = error
-
-    def get(self, task_id: str) -> Dict[str, Any] | None:
-        return self._tasks.get(task_id)
+def _require_owner_override(config: AppConfig, user_id: str, admin_key: str | None) -> None:
+    if user_id != config.auth.owner_user_id:
+        raise HTTPException(status_code=403, detail="Owner override can only enroll the configured owner user.")
+    if not config.auth.owner_override_enabled:
+        raise HTTPException(status_code=403, detail="Owner override enrollment is disabled on this deployment.")
+    expected = config.auth.owner_override_token
+    if not expected:
+        raise HTTPException(status_code=503, detail="Admin enrollment key is not configured on this deployment.")
+    if not admin_key or not hmac.compare_digest(str(admin_key), str(expected)):
+        raise HTTPException(status_code=403, detail="Invalid admin enrollment key.")
 
 
-async def _process_meeting_background(
-    config: AppConfig,
-    bus: EventBus,
-    meeting_tasks: MeetingTaskManager,
-    manager: SessionManager,
-    intent_provider: Any | None,
-    task_id: str,
-    audio_data: bytes,
-    summarize: bool,
-    max_speakers: int | None,
-) -> None:
-    tmp_dir = Path(config.paths.artifacts_dir) / "tmp"
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    in_path = tmp_dir / f"meeting_{task_id}.webm"
-    wav_path = in_path.with_suffix(".wav")
-    try:
-        meeting_tasks.update(task_id, "processing", "converting audio", 5)
-        bus.publish("meeting_progress", {"task_id": task_id, "step": "converting", "pct": 5})
-        in_path.write_bytes(audio_data)
-        import subprocess
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", str(in_path), "-f", "wav", "-acodec", "pcm_s16le",
-             "-ac", "1", "-ar", "16000", str(wav_path)],
-            capture_output=True, timeout=60,
-        )
-        if not wav_path.exists():
-            raise RuntimeError("ffmpeg conversion failed")
-        samples, sr = read_wav(wav_path)
-        duration_s = len(samples) / sr
-        if duration_s < 1.0:
-            raise RuntimeError("Audio too short (<1s)")
-
-        meeting_tasks.update(task_id, "processing", "diarizing speakers", 20)
-        bus.publish("meeting_progress", {"task_id": task_id, "step": "diarizing", "pct": 20})
-        segments = diarize(samples, sr, max_speakers=max_speakers)
-
-        meeting_tasks.update(task_id, "processing", "identifying speakers", 35)
-        bus.publish("meeting_progress", {"task_id": task_id, "step": "identifying", "pct": 35})
-        registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite")
-        enrolled = {}
-        for uid in ["scott", "default"]:
-            rec = registry.get(uid)
-            if rec:
-                enrolled[uid] = rec
-        if enrolled:
-            embedder = SpeakerEmbedder()
-            segments = identify_speakers(segments, enrolled, embedder, sr, samples)
-
-        n_segs = len(segments)
-        full_transcript_parts = []
-        for idx, seg in enumerate(segments):
-            start_samp = int(seg["start"] * sr)
-            end_samp = int(seg["end"] * sr)
-            chunk = samples[start_samp:end_samp]
-            if len(chunk) < int(sr * 0.3):
-                seg["transcript"] = ""
-                continue
-            pct = 40 + int(50 * (idx / n_segs)) if n_segs else 40
-            meeting_tasks.update(task_id, "processing", f"transcribing segment {idx+1}/{n_segs}", pct)
-            bus.publish("meeting_progress", {"task_id": task_id, "step": "transcribing", "pct": pct, "segment": idx + 1, "total": n_segs})
-            text = refine_transcript(chunk, sr, config.stt)
-            seg["transcript"] = text
-            name = seg.get("name", f"Speaker {seg['speaker'] + 1}")
-            full_transcript_parts.append(f"[{name}]: {text}")
-
-        summary = None
-        if summarize and full_transcript_parts:
-            meeting_tasks.update(task_id, "processing", "summarizing", 92)
-            bus.publish("meeting_progress", {"task_id": task_id, "step": "summarizing", "pct": 92})
-            meeting_text = "\n".join(full_transcript_parts)
-            prompt = (
-                "Summarize this meeting transcript. Extract:\n"
-                "- Key decisions made\n"
-                "- Action items with owner if mentioned\n"
-                "- Main discussion topics\n\n"
-                f"Transcript:\n{meeting_text}"
-            )
-            try:
-                if intent_provider:
-                    summary = intent_provider.complete(prompt).content.strip()
-                else:
-                    summary = manager.pipeline.ralph.run(prompt)
-            except Exception:
-                summary = None
-
-        meeting_id = uuid.uuid4().hex
-        full_transcript = "\n".join(full_transcript_parts)
-        graph_saved = False
-        graph_error = None
-        if config.neo4j.password:
-            meeting_tasks.update(task_id, "processing", "saving to graph", 95)
-            bus.publish("meeting_progress", {"task_id": task_id, "step": "saving", "pct": 95})
-            try:
-                from ..auth.neo4j_ingest import save_meeting_to_neo4j
-                save_meeting_to_neo4j(
-                    config.neo4j.uri,
-                    config.neo4j.user,
-                    config.neo4j.password,
-                    meeting_id=meeting_id,
-                    transcript=full_transcript,
-                    segments=segments,
-                    duration_s=duration_s,
-                    num_speakers=len(set(s["speaker"] for s in segments if s["speaker"] >= 0)),
-                    summary=summary,
-                    database=config.neo4j.database,
-                )
-                graph_saved = True
-            except Exception as exc:
-                graph_error = f"{type(exc).__name__}: {exc}"
-
-        num_speakers = len(set(s["speaker"] for s in segments if s["speaker"] >= 0))
-        result = {
-            "ok": True,
-            "meeting_id": meeting_id,
-            "duration_s": round(duration_s, 1),
-            "num_speakers": num_speakers,
-            "segments": segments,
-            "transcript": full_transcript,
-            "summary": summary,
-            "graph_saved": graph_saved,
-            "graph_error": graph_error,
-        }
-        meeting_tasks.update(task_id, "completed", "done", 100, result=result)
-        bus.publish("meeting_progress", {"task_id": task_id, "step": "done", "pct": 100})
-    except Exception as exc:
-        error_msg = f"{type(exc).__name__}: {exc}"
-        meeting_tasks.update(task_id, "error", "failed", 0, error=error_msg)
-        bus.publish("meeting_progress", {"task_id": task_id, "step": "error", "error": error_msg})
-    finally:
-        for p in [in_path, wav_path]:
-            if p.exists():
-                p.unlink(missing_ok=True)
+def _safe_upload_suffix(upload: UploadFile, default: str = ".wav") -> str:
+    if upload.filename and "." in upload.filename:
+        suffix = "." + upload.filename.rsplit(".", 1)[-1].lower()
+        if 1 < len(suffix) <= 12:
+            return suffix
+    return default
 
 
 def create_app(config: AppConfig) -> FastAPI:
@@ -1550,6 +1526,13 @@ def create_app(config: AppConfig) -> FastAPI:
                 "has_password": bool(config.neo4j.password),
                 "default_speaker_name": config.neo4j.default_speaker_name,
             },
+            "voiceprint_override": {
+                "owner_user_id": config.auth.owner_user_id,
+                "enabled": config.auth.owner_override_enabled,
+                "key_configured": bool(config.auth.owner_override_token),
+                "min_seconds": config.auth.owner_append_min_seconds,
+                "max_seconds": config.auth.owner_append_max_seconds,
+            },
             "capture_dir": config.paths.capture_dir or str(Path(config.paths.artifacts_dir) / "captures"),
         }
 
@@ -1637,9 +1620,7 @@ def create_app(config: AppConfig) -> FastAPI:
         audio_path = ""
         byte_count = 0
         if audio is not None:
-            suffix = ".webm"
-            if audio.filename and "." in audio.filename:
-                suffix = "." + audio.filename.rsplit(".", 1)[-1].lower()
+            suffix = _safe_upload_suffix(audio, default=".webm")
             audio_file = captures_dir / f"{capture_id}{suffix}"
             data = await audio.read()
             audio_file.write_bytes(data)
@@ -1707,113 +1688,68 @@ def create_app(config: AppConfig) -> FastAPI:
         bus.publish("mobile_capture_saved", payload)
         return {"ok": True, **payload}
 
-    @app.post("/auth/verify")
-    async def auth_verify(
-        audio: UploadFile | None = File(default=None),
+    @app.post("/voiceprints/owner-override-enroll")
+    async def owner_override_enroll(
+        request: Request,
+        audio: UploadFile = File(...),
         user_id: str = Form(default="scott"),
-    ) -> Dict[str, Any]:
-        if audio is None:
-            raise HTTPException(status_code=400, detail="audio file is required")
-        tmp_dir = Path(config.paths.artifacts_dir) / "tmp"
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        in_path = tmp_dir / f"verify_{uuid.uuid4().hex}.webm"
-        wav_path = in_path.with_suffix(".wav")
-        try:
-            data = await audio.read()
-            in_path.write_bytes(data)
-            import subprocess
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", str(in_path), "-f", "wav", "-acodec", "pcm_s16le",
-                 "-ac", "1", "-ar", "16000", str(wav_path)],
-                capture_output=True, timeout=30,
-            )
-            if not wav_path.exists():
-                raise RuntimeError("ffmpeg conversion failed")
-            from voice_agent.util.audio import read_wav
-            samples, sr = read_wav(wav_path)
-            result = verify_audio_segment(config, "", user_id, samples, sr)
-            return {
-                "user_id": user_id,
-                "score": result.get("score", 0.0),
-                "accepted": result.get("accepted", False),
-            }
-        finally:
-            for p in [in_path, wav_path]:
-                if p.exists():
-                    p.unlink(missing_ok=True)
-
-    @app.post("/voiceprints/enroll")
-    async def voiceprints_enroll(
-        audio: UploadFile | None = File(default=None),
-        user_id: str = Form(default="scott"),
+        session_id: str = Form(default="mobile"),
+        admin_key: str = Form(default=""),
+        transcript: str = Form(default=""),
         device_id: str = Form(default=""),
+        device_fingerprint: str = Form(default=""),
+        client_context: str = Form(default=""),
+        activity_context: str = Form(default=""),
     ) -> Dict[str, Any]:
-        if audio is None:
-            raise HTTPException(status_code=400, detail="audio file is required")
-        tmp_dir = Path(config.paths.artifacts_dir) / "tmp"
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        ext = ".webm"
-        if audio.filename and "." in audio.filename:
-            ext = "." + audio.filename.rsplit(".", 1)[-1].lower()
-        in_path = tmp_dir / f"enroll_{uuid.uuid4().hex}{ext}"
-        wav_path = in_path.with_suffix(".wav")
+        _require_owner_override(config, user_id, admin_key)
+        capture_id = uuid.uuid4().hex
+        override_dir = Path(config.paths.capture_dir or (Path(config.paths.artifacts_dir) / "captures")) / "voiceprint_override"
+        override_dir.mkdir(parents=True, exist_ok=True)
+        suffix = _safe_upload_suffix(audio, default=".wav")
+        audio_file = override_dir / f"{capture_id}{suffix}"
+        data = await audio.read()
+        audio_file.write_bytes(data)
+        detected = _detect_intent(transcript) if transcript.strip() else None
+        context = _capture_context(
+            request,
+            client_context=client_context,
+            device_id=device_id,
+            device_fingerprint=device_fingerprint,
+            location_lat="",
+            location_lng="",
+            location_accuracy_m="",
+            activity_context=activity_context,
+            detected=detected,
+        )
         try:
-            data = await audio.read()
-            in_path.write_bytes(data)
-            import subprocess
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", str(in_path), "-f", "wav", "-acodec", "pcm_s16le",
-                 "-ac", "1", "-ar", "16000", str(wav_path)],
-                capture_output=True, timeout=30,
+            result = enroll_from_files(
+                config,
+                user_id,
+                [str(audio_file)],
+                append=True,
+                source="ui_owner_override",
+                min_seconds=config.auth.owner_append_min_seconds,
+                max_seconds=config.auth.owner_append_max_seconds,
             )
-            if not wav_path.exists():
-                raise RuntimeError("ffmpeg conversion failed")
-            from voice_agent.util.audio import read_wav
-            samples, sr = read_wav(wav_path)
-            from voice_agent.auth.speaker_embedder import SpeakerEmbedder
-            embedder = SpeakerEmbedder()
-            embedding = embedder.embed(samples, sr)
-            from ..auth.registry import VoiceprintRegistry
-            registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite")
-
-            did = device_id.strip() or "default"
-            if did == "default":
-                existing = registry.get(user_id)
-                if existing:
-                    old_emb = existing["embedding"]
-                    n = existing.get("samples", {}).get("count", 1)
-                    merged = [(old_emb[i] * n + embedding[i]) / (n + 1) for i in range(len(embedding))]
-                    samples_info = existing.get("samples", {})
-                    samples_info["count"] = n + 1
-                    samples_info.setdefault("files", []).append(str(wav_path))
-                    registry.save(user_id, merged, samples_info, existing["threshold"])
-                    sample_count = n + 1
-                else:
-                    registry.save(user_id, embedding, {"count": 1, "files": [str(wav_path)]}, 0.60)
-                    sample_count = 1
-            else:
-                existing = registry.get_devices(user_id).get(did)
-                if existing:
-                    old_emb = existing["embedding"]
-                    n = existing.get("samples", {}).get("count", 1)
-                    merged = [(old_emb[i] * n + embedding[i]) / (n + 1) for i in range(len(embedding))]
-                    samples_info = existing.get("samples", {})
-                    samples_info["count"] = n + 1
-                    samples_info.setdefault("files", []).append(str(wav_path))
-                    registry.save_device(user_id, did, merged, samples_info, existing.get("threshold", 0.60))
-                    sample_count = n + 1
-                else:
-                    registry.save_device(user_id, did, embedding, {"count": 1, "files": [str(wav_path)]}, 0.60)
-                    sample_count = 1
-            return {
-                "user_id": user_id,
-                "device_id": did,
-                "sample_count": sample_count,
-            }
-        finally:
-            for p in [in_path, wav_path]:
-                if p.exists():
-                    p.unlink(missing_ok=True)
+        except EnrollmentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+        payload = {
+            "session_id": session_id,
+            "user_id": user_id,
+            "capture_id": capture_id,
+            "audio_path": str(audio_file),
+            "bytes": len(data),
+            "content_type": audio.content_type,
+            "device_id": context.get("device_id"),
+            "device_fingerprint": context.get("device_fingerprint"),
+            "source": "ui_owner_override",
+            "ts_ms": now_ms(),
+            **result,
+        }
+        bus.publish("voiceprint_owner_override_enrolled", payload)
+        return {"ok": True, **payload}
 
     @app.post("/voiceprints/train-neo4j")
     async def train_voiceprint_from_neo4j(req: Neo4jEnrollRequest) -> Dict[str, Any]:
