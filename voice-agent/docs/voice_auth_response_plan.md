@@ -16,6 +16,8 @@ This separates **speaker authentication** from **response voice selection** whil
 For each utterance/session:
 
 - compute speaker identity confidence against Scott voiceprint.
+- search the current active voiceprint head first.
+- if the active head is weak or rejected, search historical voiceprint versions and per-sample embeddings for top-k fallback candidates.
 - classify auth state:
   - `authenticated_scott`
   - `not_scott_known`
@@ -45,11 +47,15 @@ Recommended default for now: always output with `scott_clone`, while preserving 
 
 1. During STT/segment processing, score each segment against Scott voiceprint.
 2. Aggregate segment-level scores into session-level auth state.
+3. If the primary active head fails, evaluate top-k historical candidates and keep the best-scoring candidate with a fallback reason.
 3. Emit explicit events/fields:
    - `speaker_identity`
    - `speaker_confidence`
    - `auth_state`
    - `auth_reason`
+   - `voiceprint_version_id`
+   - `voiceprint_candidate_ids`
+   - `voiceprint_candidate_scores`
 
 ### Phase 3: Response voice routing
 
@@ -70,7 +76,8 @@ voice_response_policy:
 
 1. Persist auth outcomes to Neo4j (`VoiceAuthDecision` node/edge or event log).
 2. Add replayable audit trail: input segment -> score -> threshold -> decision.
-3. Add alerts for drift (e.g., sudden drop in Scott match rate).
+3. Persist the candidate search path: active head, fallback candidate list, chosen candidate, and reason for fallback selection.
+4. Add alerts for drift (e.g., sudden drop in Scott match rate).
 
 ---
 
@@ -90,7 +97,8 @@ voice_response_policy:
 2. Export 200-400 reviewed clips and regenerate Scott voiceprint.
 3. Build a small threshold-eval script for genuine vs imposter score histograms.
 4. Add runtime `auth_state` field in voice events.
-5. Add config-driven response voice policy and set both branches to `scott_clone`.
+5. Add graph-backed top-k candidate search and fallback ranking.
+6. Add config-driven response voice policy and set both branches to `scott_clone`.
 
 ---
 

@@ -2,11 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-<<<<<<< HEAD
-from typing import List, Optional
-=======
-from typing import Any, Dict, List
->>>>>>> 4caa783d8510f01247862aecb521c50c82cd9f9c
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -17,11 +13,6 @@ from .registry import VoiceprintRegistry
 from .speaker_embedder import SpeakerEmbedder
 
 
-<<<<<<< HEAD
-def enroll_from_files(
-    config: AppConfig, user_id: str, files: List[str], device_id: Optional[str] = None
-) -> None:
-=======
 class EnrollmentError(RuntimeError):
     pass
 
@@ -61,11 +52,19 @@ def enroll_from_files(
     source: str = "manual",
     min_seconds: float = 2.0,
     max_seconds: float = 30.0,
+    device_id: Optional[str] = None,
 ) -> Dict[str, Any]:
->>>>>>> 4caa783d8510f01247862aecb521c50c82cd9f9c
-    registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite")
+    registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite", config)
     embedder = SpeakerEmbedder()
-    existing = registry.get(user_id) if append else None
+    
+    # In append mode, we load existing samples to recalculate the mean and avoid duplicates.
+    existing = None
+    if append:
+        if device_id:
+            existing = registry.get_device(user_id, device_id)
+        else:
+            existing = registry.get(user_id)
+        
     existing_samples = ((existing or {}).get("samples") or {}).get("samples") or []
     existing_by_sha = {sample.get("sha256") for sample in existing_samples if sample.get("sha256")}
 
@@ -117,12 +116,6 @@ def enroll_from_files(
         raise EnrollmentError("No usable voice clips were available for enrollment")
 
     embedding_mean = np.mean(np.array(embeddings, dtype=float), axis=0).tolist()
-<<<<<<< HEAD
-    if device_id:
-        registry.save_device(user_id, device_id, embedding_mean, {"samples": samples_meta}, config.auth.threshold)
-    else:
-        registry.save(user_id, embedding_mean, {"samples": samples_meta}, config.auth.threshold)
-=======
     metadata = {
         "samples": samples_meta,
         "sample_count": len(samples_meta),
@@ -132,9 +125,35 @@ def enroll_from_files(
         "errors": errors,
         "legacy_mean_preserved": legacy_mean_preserved,
     }
-    registry.save(user_id, embedding_mean, metadata, config.auth.threshold)
+    
+    saved_record = (
+        registry.save_device(
+            user_id,
+            device_id,
+            embedding_mean,
+            metadata,
+            config.auth.threshold,
+            source=source,
+            append=append,
+        )
+        if device_id
+        else registry.save(
+            user_id,
+            embedding_mean,
+            metadata,
+            config.auth.threshold,
+            source=source,
+            append=append,
+        )
+    )
+        
     return {
         "user_id": user_id,
+        "device_id": device_id,
+        "version_id": saved_record.get("version_id"),
+        "group_key": saved_record.get("group_key"),
+        "voiceprint_scope": saved_record.get("scope"),
+        "lineage_mode": saved_record.get("lineage_mode"),
         "sample_count": len(samples_meta),
         "new_files_requested": len(files),
         "new_files_failed": len(errors),
@@ -142,5 +161,7 @@ def enroll_from_files(
         "threshold": config.auth.threshold,
         "legacy_mean_preserved": legacy_mean_preserved,
         "errors": errors,
+        "graph_saved": bool(saved_record.get("graph_saved") or saved_record.get("captured_in_graph")),
+        "graph_enabled": bool(saved_record.get("graph_enabled")),
+        "graph_error": saved_record.get("graph_error"),
     }
->>>>>>> 4caa783d8510f01247862aecb521c50c82cd9f9c

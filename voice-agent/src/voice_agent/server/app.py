@@ -125,10 +125,12 @@ CAPTURE_PAGE = """<!doctype html>
     audio { width: 100%; margin-top: 10px; border-radius: 6px; }
     pre { overflow: auto; max-height: 180px; background: #071019; border: 1px solid #1e293b; border-radius: 8px; padding: 10px; color: #94a3b8; font-size: 12px; margin: 0; }
     .inline-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; color: #64748b; }
-    .mode-toggle { display: flex; gap: 0; margin-bottom: 16px; border: 1px solid #2e3947; border-radius: 10px; overflow: hidden; background: #111821; }
+    .mode-toggle { position: sticky; top: max(8px, env(safe-area-inset-top)); z-index: 20; display: flex; gap: 0; margin-bottom: 16px; border: 1px solid #2e3947; border-radius: 10px; overflow: hidden; background: #111821; box-shadow: 0 10px 24px rgba(0,0,0,.28); }
     .mode-btn { flex: 1; border: 0; border-radius: 0; padding: 10px 16px; font: inherit; font-weight: 600; font-size: 13px; cursor: pointer; background: transparent; color: #64748b; transition: all .15s; min-height: auto; }
     .mode-btn.active { background: #1e293b; color: #e2e8f0; }
     .mode-btn:hover:not(.active) { background: #1a2330; color: #94a3b8; }
+    .mode-panel[hidden] { display: none !important; }
+    .mode-panel { display: block; }
     .meeting-segment { padding: 8px 10px; border-left: 3px solid #7dd3fc; margin: 6px 0; background: #0f172a; border-radius: 0 6px 6px 0; font-size: 13px; line-height: 1.45; cursor: pointer; transition: opacity .15s; }
     .meeting-segment.filtered-out { opacity: .25; }
     .meeting-segment .speaker-label { font-weight: 600; color: #7dd3fc; font-size: 12px; margin-bottom: 2px; }
@@ -172,12 +174,12 @@ CAPTURE_PAGE = """<!doctype html>
   </header>
 
   <div class="mode-toggle">
-    <button id="agentModeBtn" class="mode-btn active">&#x1F916; Agent</button>
-    <button id="meetingModeBtn" class="mode-btn">&#x1F91D; Meeting</button>
-    <button id="dispatchModeBtn" class="mode-btn">&#x1F4E4; Dispatch</button>
+    <button id="agentModeBtn" class="mode-btn active" type="button" aria-selected="true" data-mode="agent">&#x1F916; Agent</button>
+    <button id="meetingModeBtn" class="mode-btn" type="button" aria-selected="false" data-mode="meeting">&#x1F91D; Meeting</button>
+    <button id="dispatchModeBtn" class="mode-btn" type="button" aria-selected="false" data-mode="dispatch">&#x1F4E4; Dispatch</button>
   </div>
 
-  <div id="agentMode">
+  <div id="agentMode" class="mode-panel" data-mode-panel="agent">
   <section class="auth-section">
     <h2>&#x1F3A4; Voice Authentication <span class="sub">enroll &amp; verify</span></h2>
     <div class="row">
@@ -219,8 +221,6 @@ CAPTURE_PAGE = """<!doctype html>
     </div>
     <div class="btn-group">
       <button id="verifyBtn" class="secondary" disabled>&#x1F50D; Verify Voice</button>
-      <button id="enrollBtn" class="warning" disabled>&#x2B06; Enroll Voice</button>
-      <button id="dispatchAuthBtn" class="primary" disabled style="flex:0.6;">&#x1F4E4; Dispatch</button>
     </div>
   </section>
 
@@ -263,11 +263,13 @@ CAPTURE_PAGE = """<!doctype html>
   </section>
 
   <section>
+    <h2>&#x1F510; Admin Voiceprint <span class="sub">reviewed clips only</span></h2>
     <label for="adminKey">Admin voiceprint enrollment key</label>
     <input id="adminKey" type="password" autocomplete="off" placeholder="Required only for admin voiceprint enrollment">
     <div class="hint">Use this only for reviewed Scott-only clips. Live browser recordings are converted to WAV before enrollment; uploaded WAV files are preferred when available.</div>
     <div class="controls">
-      <button id="voiceprintBtn" class="warn" disabled>Append this clip to owner voiceprint</button>
+      <button id="voiceprintBtn" class="warn" disabled>Append clip to owner voiceprint</button>
+      <button id="dispatchAuthBtn" class="primary" disabled>Prepare auth event</button>
       <button id="clearKeyBtn" class="secondary">Clear key</button>
     </div>
     <div id="voiceprintStatus" class="status"></div>
@@ -286,7 +288,7 @@ CAPTURE_PAGE = """<!doctype html>
   </section>
   </div>
 
-  <div id="meetingMode" style="display:none;">
+  <div id="meetingMode" class="mode-panel" data-mode-panel="meeting" hidden>
   <section>
     <h2>&#x1F91D; Meeting Mode <span class="sub">diarize, transcribe &amp; summarize</span></h2>
     <label for="meetingFile">Upload meeting audio</label>
@@ -321,7 +323,7 @@ CAPTURE_PAGE = """<!doctype html>
       <pre id="summaryText" style="max-height:400px;"></pre>
     </div>
     <div class="btn-group" style="margin-top:10px;">
-      <button id="dispatchMeetingBtn" class="primary">&#x1F4E4; Dispatch to AssistX</button>
+      <button id="dispatchMeetingBtn" class="primary" disabled>&#x1F4E4; Dispatch to AssistX</button>
       <button id="downloadTranscriptBtn" class="secondary">&#x1F4E5; Download</button>
     </div>
   </section>
@@ -332,7 +334,7 @@ CAPTURE_PAGE = """<!doctype html>
   </section>
   </div>
 
-  <div id="dispatchMode" style="display:none;">
+  <div id="dispatchMode" class="mode-panel" data-mode-panel="dispatch" hidden>
   <section>
     <h2>&#x1F4E4; Auto-Assist Bridge <span class="sub">dispatch voice events to assistx</span></h2>
     <div class="status-bar" id="dispatchStatusBar">
@@ -397,7 +399,6 @@ CAPTURE_PAGE = """<!doctype html>
   const stopBtn = document.getElementById('stopBtn');
   const saveBtn = document.getElementById('saveBtn');
   const verifyBtn = document.getElementById('verifyBtn');
-  const enrollBtn = document.getElementById('enrollBtn');
   const clearBtn = document.getElementById('clearBtn');
   const statusEl = document.getElementById('status');
   const saveStatus = document.getElementById('saveStatus');
@@ -463,6 +464,11 @@ CAPTURE_PAGE = """<!doctype html>
   let wavBuffers = [], wavSampleRate = 0, wavBlob = null;
   let cachedContext = null;
   let lastAuthResult = null, lastMeetingResult = null;
+
+  function updateDispatchActions() {
+    dispatchAuthBtn.disabled = !(lastAuthResult && lastAuthResult.accepted);
+    dispatchMeetingBtn.disabled = !lastMeetingResult;
+  }
 
   function getDeviceId() {
     const key = 'sophia_device_id';
@@ -596,7 +602,8 @@ CAPTURE_PAGE = """<!doctype html>
   document.getElementById('testLlmBtn').onclick = testLlm;
 
   function hasLiveMic() {
-    return Boolean(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    return Boolean((window.isSecureContext || isLocal) && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
   }
 
   function setAuthPill(state, text) {
@@ -615,26 +622,35 @@ CAPTURE_PAGE = """<!doctype html>
       devEl.style.display = deviceLabel ? '' : 'none';
     }
   }
-  }
 
-  async function verifyVoice() {
+  async function verifyVoice(mode = 'manual') {
     const audioSrc = selectedFile || blob;
     if (!audioSrc) { return; }
     const form = new FormData();
     form.append('audio', audioSrc, audioSrc.name || 'capture.webm');
     form.append('user_id', userId.value || 'default');
-    saveStatus.textContent = 'Verifying voice...';
+    form.append('session_id', sessionId.value || 'mobile');
+    verifyBtn.disabled = true;
+    saveStatus.textContent = mode === 'auto' ? 'Auto-verifying voice...' : 'Verifying voice...';
     setAuthPill('enrolling', 'checking...');
     try {
       const res = await fetch('/auth/verify', { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Verify failed');
+      
+      lastScore = data.score;
+      lastAccepted = data.accepted;
+      lastAuthResult = { userId: userId.value, score: data.score, accepted: data.accepted, device_id: data.device_id };
+      updateDispatchActions();
+
       const matchedDevice = data.device_id && data.device_id !== 'default' ? ' [' + data.device_id + ']' : '';
       showAuthResult(data.score, data.accepted, matchedDevice);
+      
       const msg = data.accepted
         ? 'Voice verified ✓ score=' + data.score.toFixed(4) + matchedDevice
-        : 'Voice rejected ✗ score=' + data.score.toFixed(4) + ' — try recording again in a quiet space';
+        : 'Voice rejected ✗ score=' + data.score.toFixed(4) + ' — admin can append this reviewed clip below';
       saveStatus.textContent = msg;
+
       if (data.accepted && autoDispatchToggle.checked) {
         saveStatus.textContent = msg + ' — dispatching to AssistX...';
         const result = await autoDispatch('voice_auth',
@@ -646,34 +662,8 @@ CAPTURE_PAGE = """<!doctype html>
     } catch (err) {
       setAuthPill('fail', 'error');
       saveStatus.textContent = 'Verify error: ' + err.message;
-    }
-  }
-
-  async function enrollVoice() {
-    const audioSrc = selectedFile || blob;
-    if (!audioSrc) { return; }
-    if (!lastAccepted) {
-      saveStatus.textContent = 'Verify your voice first before enrolling.';
-      return;
-    }
-    const form = new FormData();
-    form.append('audio', audioSrc, audioSrc.name || 'capture.webm');
-    form.append('user_id', userId.value || 'default');
-    const devId = document.getElementById('deviceId').value.trim();
-    if (devId) form.append('device_id', devId);
-    saveStatus.textContent = 'Enrolling voice sample...';
-    setAuthPill('enrolling', 'enrolling...');
-    try {
-      const res = await fetch('/voiceprints/enroll', { method: 'POST', body: form });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Enroll failed');
-      const label = data.device_id && data.device_id !== 'default' ? ' (' + data.device_id + ')' : '';
-      setAuthPill('pass', 'enrolled' + label);
-      enrollCount.textContent = data.sample_count + ' samples enrolled' + label;
-      saveStatus.textContent = 'Voice enrolled ✓ (' + data.sample_count + ' total samples)' + label;
-    } catch (err) {
-      setAuthPill('fail', 'error');
-      saveStatus.textContent = 'Enroll error: ' + err.message;
+    } finally {
+      verifyBtn.disabled = !(blob || selectedFile);
     }
   }
 
@@ -792,6 +782,10 @@ CAPTURE_PAGE = """<!doctype html>
     blob = null;
     selectedFile = null;
     wavBlob = null;
+    lastScore = null;
+    lastAccepted = null;
+    lastAuthResult = null;
+    updateDispatchActions();
     updateActionButtons();
     saveStatus.textContent = '';
     if (!hasLiveMic()) {
@@ -808,6 +802,9 @@ CAPTURE_PAGE = """<!doctype html>
       preview.src = URL.createObjectURL(blob);
       preview.hidden = false;
       updateActionButtons();
+      verifyBtn.disabled = false;
+      statusEl.textContent = 'Recording stopped. Auto-verifying voice...';
+      verifyVoice('auto');
     };
     recognition = makeRecognition();
     try { recognition && recognition.start(); } catch {}
@@ -881,7 +878,10 @@ CAPTURE_PAGE = """<!doctype html>
     const data = await res.json();
     latest.textContent = JSON.stringify(data, null, 2);
     if (!res.ok) throw new Error(data.detail || 'Voiceprint append failed');
-    voiceprintStatus.textContent = 'Voiceprint updated. Run a held-out verification clip next.';
+    voiceprintStatus.textContent = 'Owner voiceprint updated. Re-checking this clip...';
+    loadSpeakers();
+    await verifyVoice('auto');
+    voiceprintStatus.textContent = 'Owner voiceprint updated. Use a separate held-out clip for final confidence.';
   }
 
   startBtn.onclick = () => start().catch(err => {
@@ -890,22 +890,25 @@ CAPTURE_PAGE = """<!doctype html>
   stopBtn.onclick = stop;
   saveBtn.onclick = () => save().catch(err => { saveStatus.textContent = err.message; });
   voiceprintBtn.onclick = () => appendVoiceprint().catch(err => { voiceprintStatus.textContent = err.message; });
-  verifyBtn.onclick = () => verifyVoice();
-  enrollBtn.onclick = () => enrollVoice();
+  verifyBtn.onclick = () => verifyVoice('manual');
   transcriptEl.oninput = updateActionButtons;
   audioFile.onchange = () => {
     selectedFile = audioFile.files && audioFile.files[0] ? audioFile.files[0] : null;
     blob = null;
     wavBlob = null;
+    lastScore = null;
+    lastAccepted = null;
+    lastAuthResult = null;
+    updateDispatchActions();
     if (selectedFile) {
       preview.src = URL.createObjectURL(selectedFile);
       preview.hidden = false;
       updateActionButtons();
       verifyBtn.disabled = false;
-      enrollBtn.disabled = true;
       authResult.classList.add('hidden');
       startedAt = Date.now();
-      statusEl.textContent = 'Audio selected. Add or edit transcript, then save or append to voiceprint.';
+      statusEl.textContent = 'Audio selected. Auto-verifying voice...';
+      verifyVoice('auto');
     }
   };
   clearKeyBtn.onclick = () => {
@@ -919,33 +922,42 @@ CAPTURE_PAGE = """<!doctype html>
     blob = null;
     selectedFile = null;
     wavBlob = null;
+    lastScore = null;
+    lastAccepted = null;
+    lastAuthResult = null;
+    updateDispatchActions();
     audioFile.value = '';
     updateActionButtons();
     verifyBtn.disabled = true;
-    enrollBtn.disabled = true;
     authResult.classList.add('hidden');
     latest.textContent = '{}';
   };
 
-  function switchMode(mode) {
-    [agentMode, meetingMode, dispatchMode].forEach(el => el.style.display = 'none');
-    [agentModeBtn, meetingModeBtn, dispatchModeBtn].forEach(el => el.classList.remove('active'));
+  function switchMode(mode, opts = {}) {
+    if (!['agent', 'meeting', 'dispatch'].includes(mode)) mode = 'agent';
+    const panels = { agent: agentMode, meeting: meetingMode, dispatch: dispatchMode };
+    const buttons = { agent: agentModeBtn, meeting: meetingModeBtn, dispatch: dispatchModeBtn };
+    Object.entries(panels).forEach(([name, el]) => {
+      el.hidden = name !== mode;
+    });
+    Object.entries(buttons).forEach(([name, btn]) => {
+      const active = name === mode;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    if (opts.persist !== false && location.hash !== '#' + mode) {
+      history.replaceState(null, '', '#' + mode);
+    }
     if (mode === 'meeting') {
-      meetingMode.style.display = '';
-      meetingModeBtn.classList.add('active');
       loadMeetingHistory();
     } else if (mode === 'dispatch') {
-      dispatchMode.style.display = '';
-      dispatchModeBtn.classList.add('active');
       refreshDispatchStatus();
-    } else {
-      agentMode.style.display = '';
-      agentModeBtn.classList.add('active');
     }
   }
   agentModeBtn.onclick = () => switchMode('agent');
   meetingModeBtn.onclick = () => switchMode('meeting');
   dispatchModeBtn.onclick = () => switchMode('dispatch');
+  window.addEventListener('hashchange', () => switchMode(location.hash.slice(1), { persist: false }));
 
   meetingFile.onchange = () => {
     processMeetingBtn.disabled = !(meetingFile.files && meetingFile.files[0]);
@@ -986,6 +998,7 @@ CAPTURE_PAGE = """<!doctype html>
           const data = t.result;
           meetingProgress.style.width = '100%';
           lastMeetingResult = data;
+          updateDispatchActions();
           const graphBadge = data.graph_saved ? '&#x1F5C4; graph saved' : (data.graph_error ? '&#x26A0; graph error' : '');
           meetingStatus.textContent = 'Done. ' + data.segments.length + ' segments, ' + data.num_speakers + ' speaker(s).';
           meetingMeta.innerHTML = '<span>' + data.duration_s + 's audio</span><span>' + data.num_speakers + ' speaker(s)</span><span>' + data.segments.length + ' segments</span>' + (graphBadge ? '<span>' + graphBadge + '</span>' : '');
@@ -1085,11 +1098,14 @@ CAPTURE_PAGE = """<!doctype html>
       meetingHistoryList.innerHTML = data.meetings.map(m => {
         const date = m.created_at ? new Date(m.created_at).toLocaleDateString() : '?';
         const label = '[' + date + '] ' + m.duration_s + 's, ' + m.num_speakers + ' spk, ' + m.segment_count + ' segs';
-        return '<div class="meeting-segment" style="cursor:pointer;font-size:12px;position:relative;" onclick="loadMeetingDetail(\'' + m.id + '\')">'
+        return '<div class="meeting-segment meeting-history-item" data-id="' + String(m.id || '').replace(/"/g, '&quot;') + '" style="cursor:pointer;font-size:12px;position:relative;">'
           + '<div class="speaker-label">' + label + (m.has_summary ? ' &#x1F4DD;' : '') + '</div>'
           + '<div>' + (m.transcript || '(no transcript)') + '</div>'
           + '<span class="del-meeting" data-id="' + m.id + '" style="position:absolute;top:4px;right:6px;cursor:pointer;color:#fb7185;font-size:15px;line-height:1;" title="Delete meeting">&times;</span></div>';
       }).join('');
+      meetingHistoryList.querySelectorAll('.meeting-history-item').forEach(el => {
+        el.onclick = () => loadMeetingDetail(el.dataset.id);
+      });
       meetingHistoryList.querySelectorAll('.del-meeting').forEach(el => {
         el.onclick = async (ev) => {
           ev.stopPropagation();
@@ -1125,6 +1141,7 @@ CAPTURE_PAGE = """<!doctype html>
         meetingSummary.style.display = 'none';
       }
       lastMeetingResult = data;
+      updateDispatchActions();
       meetingResults.style.display = '';
       meetingHistoryStatus.textContent = 'Loaded meeting from history.';
       switchMode('meeting');
@@ -1170,11 +1187,11 @@ CAPTURE_PAGE = """<!doctype html>
 
   downloadTranscriptBtn.onclick = () => {
     if (!lastMeetingResult) return;
-    const text = 'Meeting Transcript\n' + '='.repeat(40) + '\n\n'
-      + 'Duration: ' + (lastMeetingResult.duration_s || '?') + 's\n'
-      + 'Speakers: ' + (lastMeetingResult.num_speakers || '?') + '\n\n'
-      + (lastMeetingResult.transcript || '') + '\n\n'
-      + (lastMeetingResult.summary ? 'Summary:\n' + lastMeetingResult.summary : '');
+    const text = 'Meeting Transcript\\n' + '='.repeat(40) + '\\n\\n'
+      + 'Duration: ' + (lastMeetingResult.duration_s || '?') + 's\\n'
+      + 'Speakers: ' + (lastMeetingResult.num_speakers || '?') + '\\n\\n'
+      + (lastMeetingResult.transcript || '') + '\\n\\n'
+      + (lastMeetingResult.summary ? 'Summary:\\n' + lastMeetingResult.summary : '');
     const blob = new Blob([text], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1359,11 +1376,13 @@ CAPTURE_PAGE = """<!doctype html>
       ? 'Live recording is not available in this browser. Use the upload fallback.'
       : 'Live recording needs HTTPS on iOS Safari. Use the upload fallback, or open the HTTPS endpoint when enabled.');
   }
+  switchMode(location.hash.slice(1) || 'agent', { persist: false });
   const savedCount = parseInt(localStorage.getItem('sophia_capture_count') || '0');
   if (savedCount > 0) captureCount.textContent = savedCount + ' capture' + (savedCount !== 1 ? 's' : '') + ' saved';
   loadSpeakers();
   refreshGraph();
   updateActionButtons();
+  updateDispatchActions();
 })();
 </script>
 </body>
@@ -1389,6 +1408,204 @@ def _safe_upload_suffix(upload: UploadFile, default: str = ".wav") -> str:
         if 1 < len(suffix) <= 12:
             return suffix
     return default
+
+
+async def _save_upload_for_audio_processing(config: AppConfig, upload: UploadFile, prefix: str) -> Path:
+    tmp_dir = Path(config.paths.artifacts_dir) / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    suffix = _safe_upload_suffix(upload, default=".webm")
+    src_path = tmp_dir / f"{prefix}_{uuid.uuid4().hex}{suffix}"
+    src_path.write_bytes(await upload.read())
+    return src_path
+
+
+def _ensure_wav_for_processing(path: Path) -> Path:
+    if path.suffix.lower() == ".wav":
+        return path
+    wav_path = path.with_suffix(".wav")
+    import subprocess
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(path), "-f", "wav", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000", str(wav_path)],
+        capture_output=True,
+        timeout=60,
+    )
+    if result.returncode != 0 or not wav_path.exists():
+        error = result.stderr.decode("utf-8", errors="ignore")[:400]
+        raise RuntimeError(f"ffmpeg conversion failed: {error}")
+    return wav_path
+
+
+def _cleanup_paths(*paths: Path) -> None:
+    for path in paths:
+        try:
+            if path.exists():
+                path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+class MeetingTaskManager:
+    def __init__(self):
+        self._tasks: Dict[str, Dict[str, Any]] = {}
+
+    def create(self, task_id: str) -> None:
+        self._tasks[task_id] = {
+            "task_id": task_id,
+            "status": "queued",
+            "progress_pct": 0,
+            "step": "queued",
+            "result": None,
+            "error": None,
+        }
+
+    def update(self, task_id: str, status: str, step: str, pct: int, result: Any = None, error: str | None = None) -> None:
+        t = self._tasks.get(task_id)
+        if t is None:
+            return
+        t["status"] = status
+        t["step"] = step
+        t["progress_pct"] = pct
+        if result is not None:
+            t["result"] = result
+        if error is not None:
+            t["error"] = error
+
+    def get(self, task_id: str) -> Dict[str, Any] | None:
+        return self._tasks.get(task_id)
+
+
+async def _process_meeting_background(
+    config: AppConfig,
+    bus: EventBus,
+    meeting_tasks: MeetingTaskManager,
+    manager: SessionManager,
+    intent_provider: Any | None,
+    task_id: str,
+    audio_data: bytes,
+    summarize: bool,
+    max_speakers: int | None,
+) -> None:
+    tmp_dir = Path(config.paths.artifacts_dir) / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    in_path = tmp_dir / f"meeting_{task_id}.webm"
+    wav_path = in_path.with_suffix(".wav")
+    try:
+        meeting_tasks.update(task_id, "processing", "converting audio", 5)
+        bus.publish("meeting_progress", {"task_id": task_id, "step": "converting", "pct": 5})
+        in_path.write_bytes(audio_data)
+        import subprocess
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(in_path), "-f", "wav", "-acodec", "pcm_s16le",
+             "-ac", "1", "-ar", "16000", str(wav_path)],
+            capture_output=True, timeout=60,
+        )
+        if not wav_path.exists():
+            raise RuntimeError("ffmpeg conversion failed")
+        samples, sr = read_wav(wav_path)
+        duration_s = len(samples) / sr
+        if duration_s < 1.0:
+            raise RuntimeError("Audio too short (<1s)")
+
+        meeting_tasks.update(task_id, "processing", "diarizing speakers", 20)
+        bus.publish("meeting_progress", {"task_id": task_id, "step": "diarizing", "pct": 20})
+        segments = diarize(samples, sr, max_speakers=max_speakers)
+
+        meeting_tasks.update(task_id, "processing", "identifying speakers", 35)
+        bus.publish("meeting_progress", {"task_id": task_id, "step": "identifying", "pct": 35})
+        registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite")
+        enrolled = {}
+        for uid in ["scott", "default"]:
+            rec = registry.get(uid)
+            if rec:
+                enrolled[uid] = rec
+        if enrolled:
+            embedder = SpeakerEmbedder()
+            segments = identify_speakers(segments, enrolled, embedder, sr, samples)
+
+        n_segs = len(segments)
+        full_transcript_parts = []
+        for idx, seg in enumerate(segments):
+            start_samp = int(seg["start"] * sr)
+            end_samp = int(seg["end"] * sr)
+            chunk = samples[start_samp:end_samp]
+            if len(chunk) < int(sr * 0.3):
+                seg["transcript"] = ""
+                continue
+            pct = 40 + int(50 * (idx / n_segs)) if n_segs else 40
+            meeting_tasks.update(task_id, "processing", f"transcribing segment {idx+1}/{n_segs}", pct)
+            bus.publish("meeting_progress", {"task_id": task_id, "step": "transcribing", "pct": pct, "segment": idx + 1, "total": n_segs})
+            text = refine_transcript(chunk, sr, config.stt)
+            seg["transcript"] = text
+            name = seg.get("name", f"Speaker {seg['speaker'] + 1}")
+            full_transcript_parts.append(f"[{name}]: {text}")
+
+        summary = None
+        if summarize and full_transcript_parts:
+            meeting_tasks.update(task_id, "processing", "summarizing", 92)
+            bus.publish("meeting_progress", {"task_id": task_id, "step": "summarizing", "pct": 92})
+            meeting_text = "\n".join(full_transcript_parts)
+            prompt = (
+                "Summarize this meeting transcript. Extract:\n"
+                "- Key decisions made\n"
+                "- Action items with owner if mentioned\n"
+                "- Main discussion topics\n\n"
+                f"Transcript:\n{meeting_text}"
+            )
+            try:
+                if intent_provider:
+                    summary = intent_provider.complete(prompt).content.strip()
+                else:
+                    summary = manager.pipeline.ralph.run(prompt)
+            except Exception:
+                summary = None
+
+        meeting_id = uuid.uuid4().hex
+        full_transcript = "\n".join(full_transcript_parts)
+        graph_saved = False
+        graph_error = None
+        if config.neo4j.password:
+            meeting_tasks.update(task_id, "processing", "saving to graph", 95)
+            bus.publish("meeting_progress", {"task_id": task_id, "step": "saving", "pct": 95})
+            try:
+                from ..auth.neo4j_ingest import save_meeting_to_neo4j
+                save_meeting_to_neo4j(
+                    config.neo4j.uri,
+                    config.neo4j.user,
+                    config.neo4j.password,
+                    meeting_id=meeting_id,
+                    transcript=full_transcript,
+                    segments=segments,
+                    duration_s=duration_s,
+                    num_speakers=len(set(s["speaker"] for s in segments if s["speaker"] >= 0)),
+                    summary=summary,
+                    database=config.neo4j.database,
+                )
+                graph_saved = True
+            except Exception as exc:
+                graph_error = f"{type(exc).__name__}: {exc}"
+
+        num_speakers = len(set(s["speaker"] for s in segments if s["speaker"] >= 0))
+        result = {
+            "ok": True,
+            "meeting_id": meeting_id,
+            "duration_s": round(duration_s, 1),
+            "num_speakers": num_speakers,
+            "segments": segments,
+            "transcript": full_transcript,
+            "summary": summary,
+            "graph_saved": graph_saved,
+            "graph_error": graph_error,
+        }
+        meeting_tasks.update(task_id, "completed", "done", 100, result=result)
+        bus.publish("meeting_progress", {"task_id": task_id, "step": "done", "pct": 100})
+    except Exception as exc:
+        error_msg = f"{type(exc).__name__}: {exc}"
+        meeting_tasks.update(task_id, "error", "failed", 0, error=error_msg)
+        bus.publish("meeting_progress", {"task_id": task_id, "step": "error", "error": error_msg})
+    finally:
+        for p in [in_path, wav_path]:
+            if p.exists():
+                p.unlink(missing_ok=True)
 
 
 def create_app(config: AppConfig) -> FastAPI:
@@ -1482,9 +1699,68 @@ def create_app(config: AppConfig) -> FastAPI:
         }
         return context
 
+    def _log_voice_ui_event_to_neo4j(event_type: str, payload: Dict[str, Any]) -> bool:
+        if not config.neo4j.password:
+            return False
+        try:
+            from neo4j import GraphDatabase
+            driver = GraphDatabase.driver(config.neo4j.uri, auth=(config.neo4j.user, config.neo4j.password))
+            with driver.session(database=config.neo4j.database) as sess:
+                sess.run(
+                    """
+                    CREATE (e:SophiaVoiceUiEvent {
+                      id: $id,
+                      event_type: $event_type,
+                      user_id: $user_id,
+                      session_id: $session_id,
+                      accepted: $accepted,
+                      score: $score,
+                      source: $source,
+                      ts_ms: $ts_ms,
+                      payload_json: $payload_json
+                    })
+                    """,
+                    id=payload.get("event_id") or uuid.uuid4().hex,
+                    event_type=event_type,
+                    user_id=payload.get("user_id"),
+                    session_id=payload.get("session_id"),
+                    accepted=payload.get("accepted"),
+                    score=payload.get("score"),
+                    source=payload.get("source"),
+                    ts_ms=payload.get("ts_ms") or now_ms(),
+                    payload_json=json.dumps(payload, default=str),
+                )
+            driver.close()
+            return True
+        except Exception as exc:
+            bus.publish("neo4j_voice_ui_event_error", {"event_type": event_type, "error": f"{type(exc).__name__}: {exc}"})
+            return False
+
+    def _voiceprint_registry() -> VoiceprintRegistry:
+        return VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite", config)
+
+    def _neo4j_write_status() -> Dict[str, Any]:
+        password_configured = bool(config.neo4j.password)
+        return {
+            "uri": config.neo4j.uri,
+            "user": config.neo4j.user,
+            "database": config.neo4j.database,
+            "password_configured": password_configured,
+            "password_file": config.neo4j.password_file,
+            "write_ready": password_configured,
+            "write_reason": None if password_configured else "Neo4j password not configured",
+            "default_speaker_name": config.neo4j.default_speaker_name,
+        }
+
     @app.get("/", response_class=HTMLResponse)
-    async def homepage() -> str:
-        return CAPTURE_PAGE
+    async def homepage() -> HTMLResponse:
+        return HTMLResponse(
+            CAPTURE_PAGE,
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+            },
+        )
 
     @app.get("/healthz")
     async def healthz() -> Dict[str, Any]:
@@ -1519,13 +1795,7 @@ def create_app(config: AppConfig) -> FastAPI:
                 "intent_draft_enabled": bool(intent_provider),
             },
             "tts": {"backend": config.tts.backend},
-            "memory_graph": {
-                "uri": config.neo4j.uri,
-                "user": config.neo4j.user,
-                "database": config.neo4j.database,
-                "has_password": bool(config.neo4j.password),
-                "default_speaker_name": config.neo4j.default_speaker_name,
-            },
+            "memory_graph": _neo4j_write_status(),
             "voiceprint_override": {
                 "owner_user_id": config.auth.owner_user_id,
                 "enabled": config.auth.owner_override_enabled,
@@ -1533,18 +1803,78 @@ def create_app(config: AppConfig) -> FastAPI:
                 "min_seconds": config.auth.owner_append_min_seconds,
                 "max_seconds": config.auth.owner_append_max_seconds,
             },
+            "artifacts_dir": config.paths.artifacts_dir,
+            "voiceprint_db": str(Path(config.paths.artifacts_dir) / "results.sqlite"),
             "capture_dir": config.paths.capture_dir or str(Path(config.paths.artifacts_dir) / "captures"),
         }
 
     @app.get("/memory-graph/status")
     async def memory_graph_status() -> Dict[str, Any]:
-        return {
-            "uri": config.neo4j.uri,
-            "user": config.neo4j.user,
-            "database": config.neo4j.database,
-            "has_password": bool(config.neo4j.password),
-            "default_speaker_name": config.neo4j.default_speaker_name,
+        return _neo4j_write_status()
+
+    @app.post("/auth/verify")
+    async def auth_verify(
+        audio: UploadFile = File(...),
+        user_id: str = Form(default="default"),
+        session_id: str = Form(default="mobile"),
+    ) -> Dict[str, Any]:
+        src_path = await _save_upload_for_audio_processing(config, audio, "verify")
+        wav_path = src_path
+        try:
+            wav_path = _ensure_wav_for_processing(src_path)
+            samples, sr = read_wav(str(wav_path))
+            payload = verify_audio_segment(config, session_id, user_id, samples, sr)
+            payload["source"] = "ui_auto_verify"
+            payload["neo4j_logged"] = _log_voice_ui_event_to_neo4j("voice_auth_verified", payload)
+            bus.publish("ui_voice_auth_verified", payload)
+            return {"ok": True, **payload}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+        finally:
+            _cleanup_paths(src_path, wav_path if wav_path != src_path else Path("__missing__"))
+
+    @app.post("/voiceprints/enroll")
+    async def voiceprints_enroll(
+        audio: UploadFile = File(...),
+        user_id: str = Form(default="default"),
+        force: bool = Form(default=False),
+        device_id: str = Form(default=""),
+    ) -> Dict[str, Any]:
+        enroll_dir = Path(config.paths.capture_dir or (Path(config.paths.artifacts_dir) / "captures")) / "voiceprint_enroll"
+        enroll_dir.mkdir(parents=True, exist_ok=True)
+        suffix = _safe_upload_suffix(audio, default=".webm")
+        src_path = enroll_dir / f"{uuid.uuid4().hex}{suffix}"
+        src_path.write_bytes(await audio.read())
+        wav_path = src_path
+        try:
+            wav_path = _ensure_wav_for_processing(src_path)
+            result = enroll_from_files(
+                config,
+                user_id,
+                [str(wav_path)],
+                append=force,
+                source="ui_voice_enroll" if not force else "ui_force_voice_enroll",
+                device_id=device_id.strip() or None,
+            )
+        except EnrollmentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+        if wav_path != src_path:
+            _cleanup_paths(src_path)
+        payload = {
+            "event_id": uuid.uuid4().hex,
+            "user_id": user_id,
+            "device_id": device_id.strip() or None,
+            "source": "ui_voice_enroll",
+            "force": force,
+            "audio_path": str(wav_path),
+            "ts_ms": now_ms(),
+            **result,
         }
+        payload["neo4j_logged"] = _log_voice_ui_event_to_neo4j("voiceprint_enrolled", payload)
+        bus.publish("ui_voiceprint_enrolled", payload)
+        return {"ok": True, **payload}
 
     @app.post("/llm/test")
     async def llm_test() -> Dict[str, Any]:
@@ -1877,23 +2207,24 @@ def create_app(config: AppConfig) -> FastAPI:
 
     @app.get("/voiceprints/status")
     async def voiceprints_status() -> Dict[str, Any]:
-        from ..util.db import Database
         try:
-            db = Database(Path(config.paths.artifacts_dir) / "results.sqlite")
-            cur = db.conn.cursor()
-            cur.execute("SELECT user_id, samples_json, threshold FROM voiceprints")
             users = []
-            for row in cur.fetchall():
-                samples = json.loads(row[1])
-                uid = row[0]
-                dev_cur = db.conn.cursor()
-                dev_cur.execute("SELECT device_id FROM voiceprint_devices WHERE user_id=?", (uid,))
-                devices = [d[0] for d in dev_cur.fetchall()]
+            registry = _voiceprint_registry()
+            for uid in registry.list_users():
+                records = registry.get_all_for_user(uid)
+                devices = [record.get("device_id") for record in records if record.get("device_id") and record.get("device_id") != "default"]
+                base = next((record for record in records if record.get("device_id") == "default"), records[0] if records else None)
+                if not base:
+                    continue
                 users.append({
                     "user_id": uid,
-                    "sample_count": samples.get("count", 0),
-                    "threshold": row[2],
+                    "sample_count": base.get("sample_count", len((base.get("samples") or {}).get("samples") or [])),
+                    "threshold": base.get("threshold"),
                     "devices": devices,
+                    "version_id": base.get("version_id"),
+                    "group_key": base.get("group_key"),
+                    "scope": base.get("scope"),
+                    "lineage_mode": base.get("lineage_mode"),
                 })
             return {"users": users, "count": len(users)}
         except Exception as exc:
@@ -1901,13 +2232,9 @@ def create_app(config: AppConfig) -> FastAPI:
 
     @app.delete("/voiceprints/device/{user_id}/{device_id}")
     async def voiceprints_delete_device(user_id: str, device_id: str) -> Dict[str, Any]:
-        from ..util.db import Database
         try:
-            db = Database(Path(config.paths.artifacts_dir) / "results.sqlite")
-            cur = db.conn.cursor()
-            cur.execute("DELETE FROM voiceprint_devices WHERE user_id=? AND device_id=?", (user_id, device_id))
-            db.conn.commit()
-            return {"ok": True, "user_id": user_id, "device_id": device_id}
+            deleted = _voiceprint_registry().delete_device(user_id, device_id)
+            return {"ok": True, "user_id": user_id, "device_id": device_id, "deleted": deleted}
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
 

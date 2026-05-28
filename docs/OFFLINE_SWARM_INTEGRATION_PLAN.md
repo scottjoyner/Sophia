@@ -19,7 +19,7 @@ Sophia currently includes:
 - Piper / pyttsx3 TTS fallback.
 - OpenAI-compatible LLM intent path.
 - Hermes dashboard integration through the bundled `sophia_voice` plugin.
-- Neo4j voice identity, voiceprint, capture, and training sample workflows.
+- Neo4j voice identity, versioned voiceprint, capture, and training sample workflows.
 - Voice-insight runbook for legacy speaker seeding, training clip export, voiceprint building, clone dataset building, and legacy segment promotion.
 
 ## Target Sophia responsibilities
@@ -28,6 +28,8 @@ Sophia currently includes:
 2. Run VAD so silence/noise does not trigger transcription.
 3. Run STT and preserve segment timestamps/confidence.
 4. Score speaker identity against Scott voiceprint.
+   - Use active voiceprint head first.
+   - Fall back to historical version/sample candidate search when the active head is weak or rejected.
 5. Emit explicit `auth_state`:
    - `authenticated_scott`
    - `not_scott_known`
@@ -103,6 +105,11 @@ Sophia should not directly own broad filesystem crawling outside voice-specific 
 
 - Add `auth_state`, `speaker_identity`, `speaker_confidence`, and `auth_reason` to runtime responses/events.
 - Persist `VoiceAuthDecision` or equivalent graph events.
+- Persist candidate search metadata:
+  - active head version
+  - fallback candidate list
+  - chosen candidate
+  - fallback reason
 - Add threshold calibration artifact output.
 
 ### Phase 3 — Response voice policy
@@ -127,6 +134,14 @@ Sophia should not directly own broad filesystem crawling outside voice-specific 
   - `voice.clone_dataset_build`
   - `voice.auth_calibration`
 - Let AssistX dispatch and track these jobs.
+
+### Phase 6 — Graph candidate search
+
+- Add Neo4j vector search support for `VoiceprintVersion.embedding`.
+- Add Neo4j vector search support for `VoiceprintSample.embedding`.
+- Return top-k candidate matches when the primary head fails authentication.
+- Keep the historical lineage chain intact so candidate search can explain which versions and sample groups were considered.
+- Make candidate search the fallback mechanism, not the primary local match path, until the graph index is proven stable.
 
 ## Design-decision questions for Scott
 

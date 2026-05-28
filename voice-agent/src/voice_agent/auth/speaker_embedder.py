@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import logging
 from typing import List
 
-import importlib.util
 import numpy as np
+
+from ..config import AppConfig
+
+logger = logging.getLogger(__name__)
 
 
 class SpeakerEmbedder:
-    def __init__(self):
-        self.model = None
+    def __init__(self, config: AppConfig | None = None):
+        self.config = config
         self.target_sample_rate = 16000
-        if importlib.util.find_spec("speechbrain") is not None:
-            from speechbrain.inference import EncoderClassifier
-
+        self.model = None
+        try:
+            from speechbrain.inference.speaker import EncoderClassifier
             self.model = EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")
+        except Exception as exc:
+            logger.warning(f"Could not load speechbrain model: {exc}. Using fallback embeddings.")
 
     def _prepare_audio(self, samples: np.ndarray, sample_rate: int) -> np.ndarray:
         audio = np.asarray(samples, dtype=np.float32)
@@ -48,11 +54,18 @@ class SpeakerEmbedder:
     def _resample(samples: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
         if source_rate <= 0 or source_rate == target_rate or samples.size == 0:
             return samples.astype(np.float32)
-        duration = samples.size / float(source_rate)
-        target_len = max(1, int(round(duration * target_rate)))
-        source_x = np.linspace(0.0, duration, num=samples.size, endpoint=False)
-        target_x = np.linspace(0.0, duration, num=target_len, endpoint=False)
-        return np.interp(target_x, source_x, samples).astype(np.float32)
+        try:
+            from scipy import signal
+            # resample_poly is higher quality for audio
+            duration = samples.size / float(source_rate)
+            target_len = max(1, int(round(duration * target_rate)))
+            return signal.resample(samples, target_len).astype(np.float32)
+        except ImportError:
+            duration = samples.size / float(source_rate)
+            target_len = max(1, int(round(duration * target_rate)))
+            source_x = np.linspace(0.0, duration, num=samples.size, endpoint=False)
+            target_x = np.linspace(0.0, duration, num=target_len, endpoint=False)
+            return np.interp(target_x, source_x, samples).astype(np.float32)
 
     def embed(self, samples: np.ndarray, sample_rate: int) -> List[float]:
         audio = self._prepare_audio(samples, sample_rate)
@@ -60,19 +73,14 @@ class SpeakerEmbedder:
             mean = float(np.mean(audio)) if audio.size else 0.0
             std = float(np.std(audio)) if audio.size else 0.0
             energy = float(np.mean(np.abs(audio))) if audio.size else 0.0
-            return [mean, std, energy]
+            # Return a simple 192-dim vector for compatibility with speechbrain-trained registries
+            vec = np.zeros(192)
+            vec[0] = mean
+            vec[1] = std
+            vec[2] = energy
+            return vec.tolist()
+            
         import torch
-
-<<<<<<< HEAD
-        target_sr = 16000
-        if sample_rate != target_sr:
-            from scipy import signal
-            samples = signal.resample_poly(samples, target_sr, sample_rate)
-            sample_rate = target_sr
-
-        tensor = torch.tensor(samples).unsqueeze(0)
-=======
         tensor = torch.tensor(audio, dtype=torch.float32).unsqueeze(0)
->>>>>>> 4caa783d8510f01247862aecb521c50c82cd9f9c
         embedding = self.model.encode_batch(tensor).squeeze().cpu().numpy()
         return embedding.tolist()

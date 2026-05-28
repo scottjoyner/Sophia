@@ -34,6 +34,7 @@ auth:
 neo4j:
   uri: bolt://host.docker.internal:7687
   user: neo4j
+  password_file: /run/secrets/neo4j_password
   password:
   database: memory
   default_speaker_name:

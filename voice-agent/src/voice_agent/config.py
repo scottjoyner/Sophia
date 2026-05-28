@@ -84,6 +84,7 @@ class Neo4jConfig(BaseModel):
     uri: str = "bolt://host.docker.internal:7687"
     user: str = "neo4j"
     password: Optional[str] = None
+    password_file: Optional[str] = None
     database: str = "memory"
     default_speaker_name: Optional[str] = None
 
@@ -125,12 +126,18 @@ def _apply_env(config: AppConfig) -> AppConfig:
         update["user"] = os.environ["NEO4J_USER"]
     if os.getenv("NEO4J_PASSWORD"):
         update["password"] = os.environ["NEO4J_PASSWORD"]
+    if os.getenv("NEO4J_PASSWORD_FILE"):
+        update["password_file"] = os.environ["NEO4J_PASSWORD_FILE"]
     if os.getenv("NEO4J_DATABASE"):
         update["database"] = os.environ["NEO4J_DATABASE"]
     if os.getenv("NEO4J_DEFAULT_SPEAKER"):
         update["default_speaker_name"] = os.environ["NEO4J_DEFAULT_SPEAKER"]
     if update:
         config.neo4j = config.neo4j.model_copy(update=update)
+    if config.neo4j.password is None and config.neo4j.password_file:
+        token = _read_secret_file(config.neo4j.password_file)
+        if token:
+            config.neo4j = config.neo4j.model_copy(update={"password": token})
     if os.getenv("SOPHIA_CAPTURE_DIR"):
         config.paths = config.paths.model_copy(update={"capture_dir": os.environ["SOPHIA_CAPTURE_DIR"]})
     llm_update = {}

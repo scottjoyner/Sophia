@@ -1,17 +1,18 @@
 # Sophia Voice — Plan
 
-## Status: Real STT + Debug Log + WebSocket E2E (2026-05-24)
+## Status: Real STT + Debug Log + WebSocket E2E + Neo4j Voiceprint Lineage (2026-05-27)
 
 ---
 
 ## Current State
 
 ### Voice Authentication
-- **Voiceprint**: Built from 2+ live phone captures (ECAPA-TDNN 192-dim)
+- **Voiceprint**: Built from 2+ live phone captures, stored as immutable Neo4j versions with per-clip sample nodes and a current active head (ECAPA-TDNN 192-dim)
 - **2025 dashcam data**: Confirmed to be a **different speaker** (scores 0.28 vs live voice at 0.88+)
 - **Reference**: 10s phone capture scoring 0.97 against voiceprint
 - **Threshold**: 0.60 (adjusted down from 0.75 for phone mic)
-- **Registry**: SQLite at `/data/runs/results.sqlite`
+- **Registry**: Neo4j primary, SQLite compatibility mirror at `/data/runs/results.sqlite`
+- **Search strategy**: active head first, then historical candidate search across version/sample embeddings when the primary match is weak or rejected
 
 ### UI (Capture Page — `GET /`)
 - **Agent Mode**: Record → Verify Voice → Enroll Voice → Save Capture
@@ -111,13 +112,25 @@
 - [x] Delete device endpoint + UI
 - [ ] Evaluate cross-mic verification accuracy (known gap)
 
-### Phase 7: Real-World Testing
+### Phase 7: Neo4j Voiceprint Lineage + Candidate Search
+- [x] Store immutable voiceprint versions in Neo4j
+- [x] Store per-clip voice sample embeddings in Neo4j
+- [x] Preserve version lineage with `DERIVED_FROM`
+- [x] Surface graph write-readiness in `/status`
+- [ ] Add Neo4j vector search on `VoiceprintVersion.embedding`
+- [ ] Add Neo4j vector search on `VoiceprintSample.embedding`
+- [ ] Return top-k candidate voiceprint versions for verification fallback
+- [ ] Compare current head vs historical candidates and choose best explanation
+- [ ] Add UI output for candidate alternatives and fallback reason
+
+### Phase 8: Real-World Testing
 - [ ] End-to-end WebSocket session with live auth
 - [ ] Meeting mode with actual multi-speaker audio
 - [ ] TTS quality evaluation with live voice reference
 - [ ] Test dispatch hub with real assistx instance
+- [ ] Verify fallback candidate search against held-out clips
 
-### Phase 8: UI Polish
+### Phase 9: UI Polish
 - [x] Speaker timeline visualization (color-coded horizontal bar)
 - [x] Speaker filter buttons (click to isolate one speaker)
 - [x] Per-speaker color coding on segment borders
@@ -125,7 +138,7 @@
 - [x] Delete meeting from history UI
 - [x] Debug event log panel (collapsible, auto-refresh every 5s)
 
-### Phase 9: STT Infrastructure
+### Phase 10: STT Infrastructure
 - [x] faster-whisper + torch + ctranslate2 installed in container
 - [x] Docker `INSTALL_VOICE_INSIGHT_DEPS=1` enabled in docker-compose.yml
 - [x] Real STT verified (training clip transcribed correctly)

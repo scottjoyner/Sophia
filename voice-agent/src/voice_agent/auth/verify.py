@@ -21,7 +21,7 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 def verify_audio_segment(
     config: AppConfig, session_id: str, user_id: str, samples: np.ndarray, sample_rate: int
 ) -> Dict[str, object]:
-    registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite")
+    registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite", config)
     embedder = SpeakerEmbedder()
     challenge_phrase = None
     if config.auth.require_challenge:
@@ -36,6 +36,9 @@ def verify_audio_segment(
             "accepted": False,
             "challenge": challenge_phrase,
             "device_id": None,
+            "voiceprint_version_id": None,
+            "voiceprint_group_key": None,
+            "voiceprint_scope": None,
             "ts_ms": now_ms(),
         }
 
@@ -59,5 +62,8 @@ def verify_audio_segment(
         "accepted": accepted,
         "challenge": challenge_phrase,
         "device_id": best_record["device_id"],
+        "voiceprint_version_id": best_record.get("version_id"),
+        "voiceprint_group_key": best_record.get("group_key"),
+        "voiceprint_scope": best_record.get("scope"),
         "ts_ms": now_ms(),
     }
