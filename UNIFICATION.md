@@ -360,6 +360,30 @@ Supported speaker states:
 - `unknown_speaker`
 - `admin_voice_override`
 
+### 9.1.1 Voiceprint storage and search model
+
+Sophia voiceprints should be treated as immutable, versioned records in Neo4j rather than a single overwritable blob.
+
+The intended graph model is:
+
+- `VoiceIdentity` for the person or speaker identity
+- `VoiceprintGroup` for a capture or enrollment grouping
+- `VoiceprintVersion` for each immutable aggregate voiceprint version
+- `VoiceprintSample` for each per-clip training sample and its embedding
+
+Relationships should preserve lineage:
+
+- `HAS_GROUP`
+- `HAS_VERSION`
+- `HAS_SAMPLE`
+- `ACTIVE_VERSION`
+- `DERIVED_FROM`
+
+Verification should use the current active head first.
+If that path fails or scores weakly, Sophia should fall back to a historical candidate search over prior `VoiceprintVersion` and `VoiceprintSample` embeddings and return the best top-k candidates for review or secondary matching.
+
+This is the desired behavior for the implementation plan. It should not be modeled as a simple overwrite of the previous voiceprint.
+
 ### 9.2 Unknown speaker registration
 
 Unknown speakers should be able to register themselves as users.
@@ -394,6 +418,19 @@ Policy:
 - Log the override event.
 - Allow the session to proceed under Scott-equivalent authority or a slightly restricted Scott authority, depending on final policy.
 - Store enough metadata to audit why the override was accepted.
+
+### 9.4.1 Fallback verification behavior
+
+If Scott's primary voice sample does not authenticate cleanly, Sophia should not stop at a single binary reject.
+
+Instead, the system should:
+
+- attempt the primary active-head match first
+- fall back to the historical version and sample embeddings in Neo4j
+- surface the strongest candidate alternatives
+- keep the fallback reason and candidate scores in the auth event record
+
+This fallback path is for authentication assistance and explainability, not for silently replacing the active voiceprint head.
 
 ### 9.5 Authorization policy
 
@@ -619,6 +656,14 @@ Minimum schemas to implement:
 - Classify dashcam transcript segments.
 - Generate embeddings for useful memory nodes.
 - Push/migrate Sophia and auto-ingest memory into unified `neo4j` database.
+
+### Phase 5.1 — Voiceprint lineage and fallback search
+
+- Make voiceprints immutable versioned nodes in Neo4j.
+- Preserve per-clip training samples as searchable graph nodes.
+- Add historical candidate search for failed or weak auth attempts.
+- Return top-k candidate matches with scores and lineage references.
+- Keep the active-head match as the primary path and fallback search as secondary behavior.
 
 ### Phase 6 — Fully offline demo
 
