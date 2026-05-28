@@ -15,6 +15,7 @@ from voice_agent.server.app import create_app
 class FakeGraphStore:
     def __init__(self) -> None:
         self.records: dict[str, list[dict[str, object]]] = {}
+        self.candidates: dict[str, list[dict[str, object]]] = {}
         self.deleted: list[tuple[str, str]] = []
 
     def save_voiceprint(self, **kwargs):
@@ -66,6 +67,12 @@ class FakeGraphStore:
         before = len(self.records.get(user_id, []))
         self.records[user_id] = [r for r in self.records.get(user_id, []) if r.get("device_id") != device_id]
         return len(self.records.get(user_id, [])) != before
+
+    def get_historical_candidates(self, user_id: str):
+        return list(self.candidates.get(user_id, []))
+
+    def search_candidates(self, user_id: str, embedding, top_k: int = 5):
+        return list(self.candidates.get(user_id, []))[:top_k]
 
 
 def _sample_samples() -> dict[str, object]:
@@ -152,6 +159,53 @@ def test_verify_uses_graph_records(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert result["accepted"] is True
     assert result["voiceprint_version_id"] == "scott-default-v1"
     assert result["voiceprint_scope"] == "identity"
+
+
+def test_verify_falls_back_to_historical_candidates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config = AppConfig(paths=PathsConfig(artifacts_dir=str(tmp_path / "runs"), workspace_dir=str(tmp_path / "workspace")))
+    registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite")
+    graph = FakeGraphStore()
+    registry.graph = graph
+    graph.save_voiceprint(
+        user_id="scott",
+        embedding_mean=[0.0, 1.0, 0.0],
+        samples=_sample_samples(),
+        threshold=0.95,
+        source="seed",
+        append=False,
+    )
+    graph.candidates["scott"] = [
+        {
+            "user_id": "scott",
+            "group_key": "scott:identity",
+            "scope": "identity",
+            "device_id": None,
+            "version_id": "scott-fallback-v2",
+            "candidate_id": "version:scott-fallback-v2",
+            "candidate_type": "version",
+            "embedding": [1.0, 0.0, 0.0],
+            "threshold": 0.6,
+            "sample_count": 2,
+            "source": "historical",
+            "append": False,
+            "lineage_mode": "append",
+            "active": False,
+        }
+    ]
+
+    class FakeEmbedder:
+        def embed(self, samples: np.ndarray, sample_rate: int):
+            return [1.0, 0.0, 0.0]
+
+    monkeypatch.setattr("voice_agent.auth.verify.VoiceprintRegistry", lambda path, config=None: registry)
+    monkeypatch.setattr("voice_agent.auth.verify.SpeakerEmbedder", FakeEmbedder)
+
+    result = verify_audio_segment(config, "session-2", "scott", np.array([0.2, 0.1, 0.0], dtype=float), 16000)
+    assert result["accepted"] is True
+    assert result["match_source"] == "historical_fallback"
+    assert result["voiceprint_version_id"] == "scott-fallback-v2"
+    assert result["fallback_used"] is True
+    assert result["voiceprint_candidate_ids"] == ["version:scott-fallback-v2"]
 
 
 def test_voiceprint_status_and_delete_use_registry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

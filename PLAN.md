@@ -117,11 +117,11 @@
 - [x] Store per-clip voice sample embeddings in Neo4j
 - [x] Preserve version lineage with `DERIVED_FROM`
 - [x] Surface graph write-readiness in `/status`
-- [ ] Add Neo4j vector search on `VoiceprintVersion.embedding`
-- [ ] Add Neo4j vector search on `VoiceprintSample.embedding`
-- [ ] Return top-k candidate voiceprint versions for verification fallback
-- [ ] Compare current head vs historical candidates and choose best explanation
-- [ ] Add UI output for candidate alternatives and fallback reason
+- [x] Add Neo4j vector search on `VoiceprintVersion.embedding`
+- [x] Add Neo4j vector search on `VoiceprintSample.embedding`
+- [x] Return top-k candidate voiceprint versions for verification fallback
+- [x] Compare current head vs historical candidates and choose best explanation
+- [x] Add UI output for candidate alternatives and fallback reason
 
 ### Phase 8: Real-World Testing
 - [ ] End-to-end WebSocket session with live auth

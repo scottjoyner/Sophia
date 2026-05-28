@@ -71,6 +71,47 @@ class VoiceprintRegistry:
             "created_at": record.get("created_at"),
         }
 
+    @staticmethod
+    def _normalize_candidate_record(record: Dict[str, Any]) -> Dict[str, Any]:
+        samples = record.get("samples")
+        if not isinstance(samples, dict):
+            samples_json = record.get("samples_json")
+            if isinstance(samples_json, str) and samples_json:
+                try:
+                    parsed = json.loads(samples_json)
+                    samples = parsed if isinstance(parsed, dict) else {}
+                except Exception:
+                    samples = {}
+            else:
+                samples = {}
+        normalized = {
+            "user_id": record.get("user_id"),
+            "group_key": record.get("group_key"),
+            "scope": record.get("scope"),
+            "device_id": record.get("device_id") or None,
+            "version_id": record.get("version_id"),
+            "candidate_id": record.get("candidate_id") or (f"version:{record.get('version_id')}" if record.get("version_id") else None),
+            "candidate_type": record.get("candidate_type") or "version",
+            "sample_id": record.get("sample_id"),
+            "sample_sha256": record.get("sample_sha256"),
+            "sample_path": record.get("sample_path"),
+            "sample_source": record.get("sample_source"),
+            "sample_rate": record.get("sample_rate"),
+            "duration_seconds": record.get("duration_seconds"),
+            "energy": record.get("energy"),
+            "embedding": list(record.get("embedding") or []),
+            "samples": samples,
+            "samples_json": record.get("samples_json"),
+            "threshold": record.get("threshold"),
+            "sample_count": int(record.get("sample_count") or VoiceprintRegistry._sample_count(samples)),
+            "source": record.get("source"),
+            "append": bool(record.get("append")),
+            "lineage_mode": record.get("lineage_mode"),
+            "active": bool(record.get("active", True)),
+            "created_at": record.get("created_at"),
+        }
+        return normalized
+
     def save(
         self,
         user_id: str,
@@ -214,6 +255,24 @@ class VoiceprintRegistry:
         for device_id, record in devices.items():
             result.append({"device_id": device_id, **record})
         return result
+
+    def get_historical_candidates(
+        self,
+        user_id: str,
+        query_embedding: Iterable[float] | None = None,
+        top_k: int = 5,
+    ) -> List[Dict[str, Any]]:
+        if self.graph:
+            try:
+                if query_embedding is not None:
+                    records = self.graph.search_candidates(user_id, list(query_embedding), top_k=top_k)
+                else:
+                    records = self.graph.get_historical_candidates(user_id)
+                if records:
+                    return [self._normalize_candidate_record(record) for record in records]
+            except Exception:
+                pass
+        return []
 
     def sample_count(self, user_id: str) -> int:
         record = self.get(user_id)

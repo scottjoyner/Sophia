@@ -70,6 +70,22 @@ def init_schema(config: Dict[str, Any]) -> None:
         "CREATE INDEX voice_segment_recording IF NOT EXISTS FOR (n:VoiceSegment) ON (n.recording_id)",
         "CREATE INDEX voice_utterance_identity IF NOT EXISTS FOR (n:VoiceUtterance) ON (n.identity_id)",
         "CREATE INDEX voice_training_identity IF NOT EXISTS FOR (n:VoiceTrainingSample) ON (n.identity_id)",
+        """
+        CREATE VECTOR INDEX voiceprint_version_embedding_idx IF NOT EXISTS
+        FOR (n:VoiceprintVersion) ON (n.embedding)
+        OPTIONS {indexConfig: {
+            `vector.dimensions`: 192,
+            `vector.similarity_function`: 'COSINE'
+        }}
+        """,
+        """
+        CREATE VECTOR INDEX voiceprint_sample_embedding_idx IF NOT EXISTS
+        FOR (n:VoiceprintSample) ON (n.embedding)
+        OPTIONS {indexConfig: {
+            `vector.dimensions`: 192,
+            `vector.similarity_function`: 'COSINE'
+        }}
+        """,
     ]
     driver = driver_from_config(config)
     with driver.session(database=target_db(config)) as session:

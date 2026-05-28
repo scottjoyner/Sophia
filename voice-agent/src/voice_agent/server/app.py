@@ -218,6 +218,7 @@ CAPTURE_PAGE = """<!doctype html>
       </div>
       <div id="enrollCount" class="enroll-count"></div>
       <div id="authDevice" class="enroll-count" style="font-size:11px;color:#64748b;margin-top:2px;"></div>
+      <div id="authCandidates" class="enroll-count" style="font-size:11px;color:#94a3b8;margin-top:4px;"></div>
     </div>
     <div class="btn-group">
       <button id="verifyBtn" class="secondary" disabled>&#x1F50D; Verify Voice</button>
@@ -623,6 +624,22 @@ CAPTURE_PAGE = """<!doctype html>
     }
   }
 
+  function renderAuthCandidates(data) {
+    const el = document.getElementById('authCandidates');
+    if (!el) return;
+    const candidates = data && Array.isArray(data.voiceprint_candidates) ? data.voiceprint_candidates : [];
+    if (!candidates.length) {
+      el.textContent = '';
+      return;
+    }
+    const fallback = data.fallback_used ? (data.fallback_reason || 'historical_fallback') : 'active_head';
+    const items = candidates.slice(0, 3).map(c => {
+      const label = (c.candidate_type === 'sample' ? 'sample' : 'version') + ' ' + (c.device_id || c.version_id || c.candidate_id || '?');
+      return label + ' ' + (c.score * 100).toFixed(0) + '%';
+    });
+    el.textContent = 'fallback: ' + fallback + ' | options: ' + items.join(' • ');
+  }
+
   async function verifyVoice(mode = 'manual') {
     const audioSrc = selectedFile || blob;
     if (!audioSrc) { return; }
@@ -640,15 +657,27 @@ CAPTURE_PAGE = """<!doctype html>
       
       lastScore = data.score;
       lastAccepted = data.accepted;
-      lastAuthResult = { userId: userId.value, score: data.score, accepted: data.accepted, device_id: data.device_id };
+      lastAuthResult = {
+        userId: userId.value,
+        score: data.score,
+        accepted: data.accepted,
+        device_id: data.device_id,
+        voiceprint_version_id: data.voiceprint_version_id,
+        voiceprint_group_key: data.voiceprint_group_key,
+        voiceprint_scope: data.voiceprint_scope,
+        match_source: data.match_source,
+        fallback_used: data.fallback_used,
+      };
       updateDispatchActions();
 
       const matchedDevice = data.device_id && data.device_id !== 'default' ? ' [' + data.device_id + ']' : '';
       showAuthResult(data.score, data.accepted, matchedDevice);
+      renderAuthCandidates(data);
       
+      const fallbackMsg = data.fallback_used ? ' — fallback ' + (data.fallback_reason || 'historical candidate search') : '';
       const msg = data.accepted
-        ? 'Voice verified ✓ score=' + data.score.toFixed(4) + matchedDevice
-        : 'Voice rejected ✗ score=' + data.score.toFixed(4) + ' — admin can append this reviewed clip below';
+        ? 'Voice verified ✓ score=' + data.score.toFixed(4) + matchedDevice + fallbackMsg
+        : 'Voice rejected ✗ score=' + data.score.toFixed(4) + fallbackMsg + ' — admin can append this reviewed clip below';
       saveStatus.textContent = msg;
 
       if (data.accepted && autoDispatchToggle.checked) {

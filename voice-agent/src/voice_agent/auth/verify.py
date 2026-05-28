@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Tuple
 
 import numpy as np
 
@@ -18,6 +18,41 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 
+def _score_record(embedding: np.ndarray, record: Dict[str, object]) -> float | None:
+    stored = np.array(record.get("embedding") or [], dtype=float).ravel()
+    if stored.size == 0 or stored.shape != embedding.shape:
+        return None
+    return cosine_similarity(embedding, stored)
+
+
+def _candidate_threshold(record: Dict[str, object], default_threshold: float) -> float:
+    threshold = record.get("threshold")
+    if isinstance(threshold, (int, float)):
+        return float(threshold)
+    return float(default_threshold)
+
+
+def _build_candidate(record: Dict[str, object], score: float, threshold: float) -> Dict[str, object]:
+    return {
+        "candidate_id": record.get("candidate_id") or record.get("version_id"),
+        "candidate_type": record.get("candidate_type") or "version",
+        "version_id": record.get("version_id"),
+        "group_key": record.get("group_key"),
+        "scope": record.get("scope"),
+        "device_id": record.get("device_id"),
+        "sample_id": record.get("sample_id"),
+        "sample_sha256": record.get("sample_sha256"),
+        "sample_path": record.get("sample_path"),
+        "sample_source": record.get("sample_source"),
+        "score": score,
+        "threshold": threshold,
+        "accepted": score >= threshold,
+        "active": bool(record.get("active", True)),
+        "lineage_mode": record.get("lineage_mode"),
+        "source": record.get("source"),
+    }
+
+
 def verify_audio_segment(
     config: AppConfig, session_id: str, user_id: str, samples: np.ndarray, sample_rate: int
 ) -> Dict[str, object]:
@@ -27,43 +62,90 @@ def verify_audio_segment(
     if config.auth.require_challenge:
         challenge_phrase = random_phrase(config.auth.challenge_phrases_file)
 
-    all_records = registry.get_all_for_user(user_id)
-    if not all_records:
-        return {
-            "session_id": session_id,
-            "user_id": user_id,
-            "score": 0.0,
-            "accepted": False,
-            "challenge": challenge_phrase,
-            "device_id": None,
-            "voiceprint_version_id": None,
-            "voiceprint_group_key": None,
-            "voiceprint_scope": None,
-            "ts_ms": now_ms(),
-        }
-
     embedding = np.array(embedder.embed(samples, sample_rate), dtype=float)
-    best_score = 0.0
-    best_record = all_records[0]
-    for record in all_records:
-        stored = np.array(record["embedding"], dtype=float).ravel()
-        if stored.shape != embedding.shape:
+    active_records = registry.get_all_for_user(user_id)
+    active_candidates: List[Tuple[float, Dict[str, object]]] = []
+    for record in active_records:
+        score = _score_record(embedding, record)
+        if score is None:
             continue
-        score = cosine_similarity(embedding, stored)
-        if score > best_score:
-            best_score = score
-            best_record = record
+        active_candidates.append((score, record))
 
-    accepted = best_score >= best_record["threshold"]
+    active_candidates.sort(key=lambda item: item[0], reverse=True)
+    best_active_score = active_candidates[0][0] if active_candidates else 0.0
+    best_active_record = active_candidates[0][1] if active_candidates else None
+    active_threshold = _candidate_threshold(best_active_record or {}, config.auth.threshold)
+    active_accepted = best_active_record is not None and best_active_score >= active_threshold
+
+    historical_candidates: List[Dict[str, object]] = []
+    best_fallback_candidate: Dict[str, object] | None = None
+    fallback_score = 0.0
+    fallback_used = False
+    fallback_reason = None
+
+    if not active_accepted:
+        fallback_reason = "active_head_below_threshold" if best_active_record else "no_active_match"
+        candidate_records = registry.get_historical_candidates(user_id, embedding, top_k=5)
+        seen: set[str] = set()
+        scored_candidates: List[Dict[str, object]] = []
+        for record in candidate_records:
+            candidate_id = str(record.get("candidate_id") or "")
+            version_id = str(record.get("version_id") or "")
+            if not candidate_id:
+                continue
+            if best_active_record and record.get("candidate_type") == "version" and version_id == best_active_record.get("version_id"):
+                continue
+            if candidate_id in seen:
+                continue
+            score = _score_record(embedding, record)
+            if score is None:
+                continue
+            seen.add(candidate_id)
+            threshold = _candidate_threshold(record, config.auth.threshold)
+            scored = _build_candidate(record, score, threshold)
+            scored_candidates.append(scored)
+        scored_candidates.sort(key=lambda item: item["score"], reverse=True)
+        historical_candidates = scored_candidates[:5]
+        if historical_candidates:
+            best_fallback_candidate = historical_candidates[0]
+            fallback_score = float(best_fallback_candidate["score"])
+            fallback_used = True
+            if fallback_score >= float(best_fallback_candidate["threshold"]):
+                active_accepted = True
+        else:
+            fallback_reason = fallback_reason or "no_historical_candidates"
+
+    selected_record = best_active_record or {}
+    selected_score = best_active_score
+    match_source = "active_head"
+    if fallback_used and best_fallback_candidate:
+        selected_record = {
+            "version_id": best_fallback_candidate.get("version_id"),
+            "group_key": best_fallback_candidate.get("group_key"),
+            "scope": best_fallback_candidate.get("scope"),
+            "device_id": best_fallback_candidate.get("device_id"),
+        }
+        selected_score = fallback_score
+        match_source = "historical_fallback"
+
     return {
         "session_id": session_id,
         "user_id": user_id,
-        "score": best_score,
-        "accepted": accepted,
+        "score": selected_score,
+        "primary_score": best_active_score,
+        "fallback_score": fallback_score if fallback_used else None,
+        "accepted": active_accepted,
+        "match_source": match_source,
+        "fallback_used": fallback_used,
+        "fallback_reason": fallback_reason,
         "challenge": challenge_phrase,
-        "device_id": best_record["device_id"],
-        "voiceprint_version_id": best_record.get("version_id"),
-        "voiceprint_group_key": best_record.get("group_key"),
-        "voiceprint_scope": best_record.get("scope"),
+        "device_id": selected_record.get("device_id") if selected_record else None,
+        "voiceprint_version_id": selected_record.get("version_id") if selected_record else None,
+        "voiceprint_group_key": selected_record.get("group_key") if selected_record else None,
+        "voiceprint_scope": selected_record.get("scope") if selected_record else None,
+        "voiceprint_match_type": best_fallback_candidate.get("candidate_type") if best_fallback_candidate else ("version" if best_active_record else None),
+        "voiceprint_candidate_ids": [candidate["candidate_id"] for candidate in historical_candidates],
+        "voiceprint_candidate_scores": [candidate["score"] for candidate in historical_candidates],
+        "voiceprint_candidates": historical_candidates,
         "ts_ms": now_ms(),
     }

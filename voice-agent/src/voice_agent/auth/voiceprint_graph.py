@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import uuid
+import threading
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, ClassVar, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ..config import Neo4jConfig
 
@@ -27,11 +28,17 @@ class VoiceprintGraphRecord:
 
 
 class VoiceprintGraphStore:
+    EMBEDDING_DIMENSION: ClassVar[int] = 192
+    _schema_lock: ClassVar[threading.Lock] = threading.Lock()
+    _schema_bootstrapped: ClassVar[set[tuple[str, str, str | None]]] = set()
+
     def __init__(self, uri: str, user: str, password: str, database: str | None = None):
         self.uri = uri
         self.user = user
         self.password = password
         self.database = database
+        self.schema_error: str | None = None
+        self.ensure_schema()
 
     @classmethod
     def from_config(cls, config: Neo4jConfig | None) -> VoiceprintGraphStore | None:
@@ -55,6 +62,51 @@ class VoiceprintGraphStore:
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise RuntimeError("neo4j driver not installed") from exc
         return GraphDatabase.driver(self.uri, auth=(self.user, self.password))
+
+    def ensure_schema(self) -> None:
+        bootstrap_key = (self.uri, self.user, self.database)
+        if bootstrap_key in self._schema_bootstrapped:
+            return
+        with self._schema_lock:
+            if bootstrap_key in self._schema_bootstrapped:
+                return
+            queries = [
+                (
+                    "voiceprint_version_embedding_idx",
+                    f"""
+                    CREATE VECTOR INDEX voiceprint_version_embedding_idx IF NOT EXISTS
+                    FOR (n:VoiceprintVersion) ON (n.embedding)
+                    OPTIONS {{indexConfig: {{
+                        `vector.dimensions`: {self.EMBEDDING_DIMENSION},
+                        `vector.similarity_function`: 'COSINE'
+                    }}}}
+                    """,
+                ),
+                (
+                    "voiceprint_sample_embedding_idx",
+                    f"""
+                    CREATE VECTOR INDEX voiceprint_sample_embedding_idx IF NOT EXISTS
+                    FOR (n:VoiceprintSample) ON (n.embedding)
+                    OPTIONS {{indexConfig: {{
+                        `vector.dimensions`: {self.EMBEDDING_DIMENSION},
+                        `vector.similarity_function`: 'COSINE'
+                    }}}}
+                    """,
+                ),
+            ]
+            driver = None
+            try:
+                driver = self._driver()
+                with driver.session(database=self.database) as session:
+                    for _, query in queries:
+                        session.run(query).consume()
+                self._schema_bootstrapped.add(bootstrap_key)
+                self.schema_error = None
+            except Exception as exc:  # pragma: no cover - bootstrap should not block the app
+                self.schema_error = f"{type(exc).__name__}: {exc}"
+            finally:
+                if driver is not None:
+                    driver.close()
 
     @staticmethod
     def _parse_samples_json(samples_json: str | None) -> Dict[str, Any]:
@@ -101,6 +153,93 @@ class VoiceprintGraphStore:
                 return [dict(row) for row in session.run(query, **params)]
         finally:
             driver.close()
+
+    @staticmethod
+    def _candidate_id_from_row(row: Dict[str, Any]) -> str:
+        candidate_type = row.get("candidate_type") or "version"
+        if candidate_type == "sample":
+            sample_id = row.get("sample_id") or row.get("sample_sha256") or row.get("version_id")
+            return f"sample:{row.get('version_id')}:{sample_id}"
+        return f"version:{row.get('version_id')}"
+
+    def _search_vector_candidates(
+        self,
+        *,
+        user_id: str,
+        embedding: Sequence[float],
+        top_k: int,
+    ) -> List[Dict[str, Any]]:
+        version_query = """
+        CALL db.index.vector.queryNodes('voiceprint_version_embedding_idx', $limit, $embedding) YIELD node, score
+        WITH node, score
+        WHERE node.user_id = $user_id
+        RETURN
+            node.user_id AS user_id,
+            node.group_key AS group_key,
+            node.scope AS scope,
+            node.device_id AS device_id,
+            node.version_id AS version_id,
+            node.version_id AS candidate_id_raw,
+            'version' AS candidate_type,
+            NULL AS sample_id,
+            NULL AS sample_sha256,
+            NULL AS sample_path,
+            NULL AS sample_source,
+            node.embedding AS embedding,
+            node.threshold AS threshold,
+            node.sample_count AS sample_count,
+            node.source AS source,
+            node.append AS append,
+            node.lineage_mode AS lineage_mode,
+            coalesce(node.active, true) AS active,
+            node.created_at AS created_at,
+            score AS score
+        ORDER BY score DESC
+        LIMIT $limit
+        """
+        sample_query = """
+        CALL db.index.vector.queryNodes('voiceprint_sample_embedding_idx', $limit, $embedding) YIELD node, score
+        WITH node, score
+        WHERE node.user_id = $user_id
+        RETURN
+            node.user_id AS user_id,
+            node.group_key AS group_key,
+            CASE WHEN coalesce(node.device_id, '') = '' THEN 'identity' ELSE 'device' END AS scope,
+            node.device_id AS device_id,
+            node.version_id AS version_id,
+            node.sample_id AS sample_id,
+            'sample' AS candidate_type,
+            node.sha256 AS sample_sha256,
+            node.path AS sample_path,
+            node.source AS sample_source,
+            node.embedding AS embedding,
+            NULL AS threshold,
+            NULL AS sample_count,
+            node.source AS source,
+            NULL AS append,
+            NULL AS lineage_mode,
+            true AS active,
+            node.created_at AS created_at,
+            score AS score
+        ORDER BY score DESC
+        LIMIT $limit
+        """
+        results: List[Dict[str, Any]] = []
+        driver = self._driver()
+        try:
+            with driver.session(database=self.database) as session:
+                version_rows = [dict(row) for row in session.run(version_query, user_id=user_id, embedding=list(embedding), limit=top_k)]
+                sample_rows = [dict(row) for row in session.run(sample_query, user_id=user_id, embedding=list(embedding), limit=top_k)]
+        finally:
+            driver.close()
+        combined: Dict[str, Dict[str, Any]] = {}
+        for row in version_rows + sample_rows:
+            candidate_id = self._candidate_id_from_row(row)
+            row["candidate_id"] = candidate_id
+            if candidate_id not in combined or float(row.get("score") or 0.0) > float(combined[candidate_id].get("score") or 0.0):
+                combined[candidate_id] = row
+        results = sorted(combined.values(), key=lambda row: float(row.get("score") or 0.0), reverse=True)
+        return results[:top_k]
 
     def save_voiceprint(
         self,
@@ -166,12 +305,14 @@ class VoiceprintGraphStore:
                     session.run(
                         """
                         MATCH (group:VoiceprintGroup {group_key: $group_key})
+                        MATCH (version:VoiceprintVersion {version_id: $version_id})
                         UNWIND $samples AS sample
                         CREATE (voice_sample:VoiceprintSample {
                             sample_id: sample.sample_id,
                             user_id: $user_id,
                             group_key: $group_key,
                             device_id: $device_id,
+                            version_id: $version_id,
                             sha256: sample.sha256,
                             path: sample.path,
                             source: sample.source,
@@ -183,10 +324,12 @@ class VoiceprintGraphStore:
                             created_at: datetime()
                         })
                         MERGE (group)-[:HAS_SAMPLE]->(voice_sample)
+                        MERGE (version)-[:HAS_SAMPLE]->(voice_sample)
                         """,
                         user_id=user_id,
                         group_key=group_key,
                         device_id=device_id or "",
+                        version_id=version_id,
                         samples=[
                             {
                                 "sample_id": uuid.uuid4().hex,
@@ -323,6 +466,101 @@ class VoiceprintGraphStore:
         for record in records:
             record["user_id"] = user_id
         return records
+
+    def get_historical_candidates(self, user_id: str) -> List[Dict[str, Any]]:
+        query = """
+        MATCH (identity:VoiceIdentity {user_id: $user_id})-[:HAS_GROUP]->(group:VoiceprintGroup)
+        WHERE coalesce(group.deleted, false) = false
+        MATCH (group)-[:HAS_VERSION]->(version:VoiceprintVersion)
+        RETURN
+            group.group_key AS group_key,
+            group.scope AS scope,
+            group.device_id AS device_id,
+            version.version_id AS version_id,
+            version.embedding AS embedding,
+            version.samples_json AS samples_json,
+            version.threshold AS threshold,
+            version.sample_count AS sample_count,
+            version.source AS source,
+            version.append AS append,
+            version.lineage_mode AS lineage_mode,
+            version.active AS active,
+            version.created_at AS created_at
+        ORDER BY CASE WHEN coalesce(version.active, true) = true THEN 0 ELSE 1 END, version.created_at DESC
+        """
+        records = self._query_all(query, user_id=user_id)
+        candidates: List[Dict[str, Any]] = []
+        for record in records:
+            samples = self._parse_samples_json(record.get("samples_json"))
+            base = dict(record)
+            base["user_id"] = user_id
+            base["candidate_id"] = f"version:{record['version_id']}"
+            base["candidate_type"] = "version"
+            candidates.append(base)
+            for idx, sample in enumerate(samples.get("samples") or []):
+                embedding = sample.get("embedding")
+                if not isinstance(embedding, list) or not embedding:
+                    continue
+                sample_id = str(sample.get("sample_id") or sample.get("sha256") or f"{record['version_id']}:{idx}")
+                candidates.append(
+                    {
+                        "user_id": user_id,
+                        "group_key": record.get("group_key"),
+                        "scope": record.get("scope"),
+                        "device_id": record.get("device_id") or None,
+                        "version_id": record.get("version_id"),
+                        "candidate_id": f"sample:{record['version_id']}:{sample_id}",
+                        "candidate_type": "sample",
+                        "sample_id": sample_id,
+                        "sample_sha256": sample.get("sha256"),
+                        "sample_path": sample.get("path"),
+                        "sample_source": sample.get("source") or record.get("source"),
+                        "sample_rate": sample.get("sample_rate"),
+                        "duration_seconds": sample.get("duration_seconds"),
+                        "energy": sample.get("energy"),
+                        "embedding": list(embedding),
+                        "threshold": record.get("threshold"),
+                        "sample_count": record.get("sample_count"),
+                        "source": record.get("source"),
+                        "append": record.get("append"),
+                        "lineage_mode": record.get("lineage_mode"),
+                        "active": bool(record.get("active", True)),
+                        "created_at": record.get("created_at"),
+                    }
+                )
+        return candidates
+
+    def search_candidates(self, user_id: str, embedding: Sequence[float], top_k: int = 5) -> List[Dict[str, Any]]:
+        try:
+            results = self._search_vector_candidates(user_id=user_id, embedding=embedding, top_k=top_k)
+            if results:
+                return results
+        except Exception:
+            pass
+        historical = self.get_historical_candidates(user_id)
+        scored: List[Dict[str, Any]] = []
+        embedding_array = list(embedding)
+        if not embedding_array:
+            return historical[:top_k]
+        for row in historical:
+            stored = row.get("embedding") or []
+            if len(stored) != len(embedding_array):
+                continue
+            try:
+                import numpy as np
+
+                query = np.array(embedding_array, dtype=float)
+                stored_vec = np.array(stored, dtype=float)
+                denom = float(np.linalg.norm(query) * np.linalg.norm(stored_vec))
+                score = float(np.dot(query, stored_vec) / denom) if denom else 0.0
+            except Exception:
+                continue
+            candidate = dict(row)
+            candidate["score"] = score
+            candidate["candidate_id"] = candidate.get("candidate_id") or self._candidate_id_from_row(candidate)
+            scored.append(candidate)
+        scored.sort(key=lambda row: float(row.get("score") or 0.0), reverse=True)
+        return scored[:top_k]
 
     def get_active_record(self, user_id: str) -> Dict[str, Any] | None:
         records = self.get_active_records(user_id)
