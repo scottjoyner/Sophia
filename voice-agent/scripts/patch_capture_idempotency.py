@@ -7,6 +7,10 @@ captures or duplicate Neo4j memory writes after uncertain network failures.
 Run from repository root:
 
     python voice-agent/scripts/patch_capture_idempotency.py
+
+The patcher is intentionally order-tolerant with the reliability/offline UI
+patchers. It can run before or after those patches as long as app.py still uses
+the current create_app/capture route structure.
 """
 from __future__ import annotations
 
@@ -28,27 +32,46 @@ def replace_once(content: str, old: str, new: str, label: str) -> str:
     return content.replace(old, new, 1)
 
 
-def ensure_client_capture_id(content: str) -> str:
-    if CLIENT_ID_MARKER in content:
+def insert_after_once(content: str, needle: str, insertion: str, marker: str, label: str) -> str:
+    if marker in content:
         return content
-    content = replace_once(
-        content,
-        """        activity_context: str = Form(default=""),\n    ) -> Dict[str, Any]:\n""",
-        """        activity_context: str = Form(default=""),\n        client_capture_id: str = Form(default=""),\n    ) -> Dict[str, Any]:\n""",
-        "capture client id form field",
-    )
-    content = replace_once(
-        content,
-        """                    metadata={"session_id": session_id, "bytes": byte_count},\n""",
-        """                    metadata={"session_id": session_id, "bytes": byte_count, "client_capture_id": client_capture_id_clean or None},\n""",
-        "capture client id metadata",
-    )
-    content = replace_once(
-        content,
-        """            "capture_id": capture_id,\n""",
-        """            "capture_id": capture_id,\n            "client_capture_id": client_capture_id_clean or None,\n""",
-        "capture client id response",
-    )
+    return replace_once(content, needle, needle + insertion, label)
+
+
+def ensure_client_capture_id(content: str) -> str:
+    if CLIENT_ID_MARKER not in content:
+        content = replace_once(
+            content,
+            """        activity_context: str = Form(default=""),\n    ) -> Dict[str, Any]:\n""",
+            """        activity_context: str = Form(default=""),\n        client_capture_id: str = Form(default=""),\n    ) -> Dict[str, Any]:\n""",
+            "capture client id form field",
+        )
+
+    if "client_capture_id_clean or None" not in content:
+        if "\"client_capture_id\": client_capture_id_clean or None" not in content:
+            content = replace_once(
+                content,
+                """            "capture_id": capture_id,\n""",
+                """            "capture_id": capture_id,\n            "client_capture_id": client_capture_id_clean or None,\n""",
+                "capture client id response",
+            )
+
+    # Update whichever graph-write metadata shape is present.
+    if "\"client_capture_id\": client_capture_id_clean or None" not in content:
+        if "metadata={\"session_id\": session_id, \"bytes\": byte_count}" in content:
+            content = replace_once(
+                content,
+                """                    metadata={"session_id": session_id, "bytes": byte_count},\n""",
+                """                    metadata={"session_id": session_id, "bytes": byte_count, "client_capture_id": client_capture_id_clean or None},\n""",
+                "capture client id direct metadata",
+            )
+        elif "\"metadata\": {\"session_id\": session_id, \"bytes\": byte_count}" in content:
+            content = replace_once(
+                content,
+                """            "metadata": {"session_id": session_id, "bytes": byte_count},\n""",
+                """            "metadata": {"session_id": session_id, "bytes": byte_count, "client_capture_id": client_capture_id_clean or None},\n""",
+                "capture client id graph outbox metadata",
+            )
     return content
 
 
@@ -65,24 +88,26 @@ def patch_content(content: str) -> str:
         "capture idempotency import",
     )
 
-    content = replace_once(
+    content = insert_after_once(
         content,
-        """    meeting_tasks = MeetingTaskManager()\n    app.state.config = config\n""",
-        """    meeting_tasks = MeetingTaskManager()\n    capture_idempotency = CaptureIdempotencyStore(Path(config.paths.artifacts_dir) / "capture_idempotency.sqlite")\n    app.state.config = config\n""",
+        """    meeting_tasks = MeetingTaskManager()\n""",
+        """    capture_idempotency = CaptureIdempotencyStore(Path(config.paths.artifacts_dir) / "capture_idempotency.sqlite")\n""",
+        "capture_idempotency = CaptureIdempotencyStore",
         "capture idempotency store",
     )
 
-    content = replace_once(
+    content = insert_after_once(
         content,
         """    app.state.meeting_tasks = meeting_tasks\n""",
-        """    app.state.meeting_tasks = meeting_tasks\n    app.state.capture_idempotency = capture_idempotency\n""",
+        """    app.state.capture_idempotency = capture_idempotency\n""",
+        "app.state.capture_idempotency = capture_idempotency",
         "capture idempotency app state",
     )
 
     content = replace_once(
         content,
-        """        capture_id = uuid.uuid4().hex\n        captures_dir = Path(config.paths.capture_dir or (Path(config.paths.artifacts_dir) / "captures"))\n""",
-        """        capture_id = uuid.uuid4().hex\n        client_capture_id_clean = CaptureIdempotencyStore.normalize_key(client_capture_id)\n        if client_capture_id_clean:\n            replay = capture_idempotency.get(client_capture_id_clean)\n            if replay:\n                bus.publish("mobile_capture_idempotent_replay", replay)\n                return replay\n        captures_dir = Path(config.paths.capture_dir or (Path(config.paths.artifacts_dir) / "captures"))\n""",
+        """        capture_id = uuid.uuid4().hex\n""",
+        """        capture_id = uuid.uuid4().hex\n        client_capture_id_clean = CaptureIdempotencyStore.normalize_key(client_capture_id)\n        if client_capture_id_clean:\n            replay = capture_idempotency.get(client_capture_id_clean)\n            if replay:\n                bus.publish("mobile_capture_idempotent_replay", replay)\n                return replay\n""",
         "capture idempotency early replay",
     )
 
@@ -93,12 +118,22 @@ def patch_content(content: str) -> str:
         1,
     )
 
-    content = replace_once(
-        content,
-        """        bus.publish("mobile_capture_saved", payload)\n        return {"ok": True, **payload}\n""",
-        """        response_payload = {"ok": True, **payload}\n        if client_capture_id_clean:\n            capture_idempotency.put(client_capture_id_clean, capture_id, response_payload)\n        bus.publish("mobile_capture_saved", payload)\n        return response_payload\n""",
-        "capture idempotency store response",
-    )
+    if "response_payload = {\"ok\": True, **payload}" in content:
+        # Already has another response-payload refactor; add cache write if missing.
+        content = insert_after_once(
+            content,
+            """        response_payload = {"ok": True, **payload}\n""",
+            """        if client_capture_id_clean:\n            capture_idempotency.put(client_capture_id_clean, capture_id, response_payload)\n""",
+            "capture_idempotency.put(client_capture_id_clean, capture_id, response_payload)",
+            "capture idempotency cache existing response payload",
+        )
+    else:
+        content = replace_once(
+            content,
+            """        bus.publish("mobile_capture_saved", payload)\n        return {"ok": True, **payload}\n""",
+            """        response_payload = {"ok": True, **payload}\n        if client_capture_id_clean:\n            capture_idempotency.put(client_capture_id_clean, capture_id, response_payload)\n        bus.publish("mobile_capture_saved", payload)\n        return response_payload\n""",
+            "capture idempotency store response",
+        )
 
     return content
 
