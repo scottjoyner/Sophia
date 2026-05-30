@@ -19,7 +19,9 @@ def test_verify_hardening_json_reports_groups():
     assert "ok" in payload
     assert "groups" in payload
     assert "offline_browser_queue" in payload["groups"]
+    assert "offline_reconciliation" in payload["groups"]
     assert "capture_idempotency" in payload["groups"]
+    assert "capture_lookup_endpoint" in payload["groups"]
 
 
 def test_verify_hardening_can_pass_with_all_markers(tmp_path):
@@ -54,10 +56,19 @@ def test_verify_hardening_can_pass_with_all_markers(tmp_path):
                 "saveOfflineFirst",
                 "syncOfflineQueue",
                 "form.append('client_capture_id', record.client_capture_id)",
+                "reconcileOfflineRecord(record)",
+                "applyServerCaptureResponse(record, data, source = 'upload')",
+                "fetch('/capture/by-client-id/'",
+                "status: 'reconciling'",
+                "reconciled_from: source",
                 "CaptureIdempotencyStore",
                 "client_capture_id: str = Form",
                 "capture_idempotency.get(client_capture_id_clean)",
                 "capture_idempotency.put(client_capture_id_clean, capture_id, response_payload)",
+                '@app.get("/capture/by-client-id/{client_capture_id}")',
+                "async def capture_by_client_id(client_capture_id: str)",
+                '"found": False',
+                '"found": True',
             ]
         ),
         encoding="utf-8",
