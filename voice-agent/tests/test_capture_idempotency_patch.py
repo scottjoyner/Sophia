@@ -37,6 +37,10 @@ def test_capture_idempotency_patch_is_idempotent(tmp_path):
     assert "capture_idempotency.get(client_capture_id_clean)" in patched
     assert "mobile_capture_idempotent_replay" in patched
     assert "capture_idempotency.put(client_capture_id_clean, capture_id, response_payload)" in patched
+    assert '@app.get("/capture/by-client-id/{client_capture_id}")' in patched
+    assert "async def capture_by_client_id(client_capture_id: str)" in patched
+    assert '"found": False' in patched
+    assert '"found": True' in patched
 
     second = subprocess.run(
         [sys.executable, "voice-agent/scripts/patch_capture_idempotency.py"],
@@ -78,3 +82,4 @@ def test_capture_idempotency_patch_after_graph_outbox_patch(tmp_path):
     assert "capture_idempotency = CaptureIdempotencyStore" in patched
     assert "capture_idempotency.get(client_capture_id_clean)" in patched
     assert "capture_idempotency.put(client_capture_id_clean, capture_id, response_payload)" in patched
+    assert '@app.get("/capture/by-client-id/{client_capture_id}")' in patched
