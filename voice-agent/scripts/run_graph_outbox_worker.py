@@ -43,11 +43,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--interval-seconds", type=float, default=30.0, help="Replay loop interval. Default: 30 seconds.")
     parser.add_argument("--once", action="store_true", help="Run one replay pass then exit.")
     parser.add_argument("--json", action="store_true", help="Emit JSON lines instead of human-readable logs.")
+    parser.add_argument(
+        "--prune-succeeded-days",
+        type=float,
+        default=7.0,
+        help="Delete succeeded outbox rows older than this many days. Default: 7. Use 0 to prune all succeeded rows.",
+    )
     return parser
 
 
-def replay_once(config, outbox: GraphOutbox, *, limit: int) -> dict:
-    before = outbox.counts()
+def replay_once(config, outbox: GraphOutbox, *, limit: int, prune_succeeded_days: float = 7.0) -> dict:
+    before = outbox.summary()
     result = replay_graph_outbox_items(
         outbox,
         neo4j_uri=config.neo4j.uri,
@@ -56,8 +62,16 @@ def replay_once(config, outbox: GraphOutbox, *, limit: int) -> dict:
         neo4j_database=config.neo4j.database,
         limit=max(1, min(limit, 500)),
     )
-    after = outbox.counts()
-    return {"ts_ms": int(time.time() * 1000), "ok": result.get("ok", False), "before": before, "result": result, "after": after}
+    pruned = outbox.prune_succeeded(older_than_ms=int(max(0.0, prune_succeeded_days) * 24 * 60 * 60 * 1000))
+    after = outbox.summary()
+    return {
+        "ts_ms": int(time.time() * 1000),
+        "ok": result.get("ok", False),
+        "before": before,
+        "result": result,
+        "pruned_succeeded": pruned,
+        "after": after,
+    }
 
 
 def emit(payload: dict, *, as_json: bool) -> None:
@@ -67,7 +81,7 @@ def emit(payload: dict, *, as_json: bool) -> None:
         print(
             "graph-outbox replay "
             f"ok={payload.get('ok')} before={payload.get('before')} "
-            f"result={payload.get('result')} after={payload.get('after')}",
+            f"result={payload.get('result')} pruned={payload.get('pruned_succeeded')} after={payload.get('after')}",
             flush=True,
         )
 
@@ -83,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
 
     exit_code = 0
     while not _STOP:
-        payload = replay_once(config, outbox, limit=args.limit)
+        payload = replay_once(config, outbox, limit=args.limit, prune_succeeded_days=args.prune_succeeded_days)
         emit(payload, as_json=args.json)
         if not payload["ok"]:
             exit_code = 2
