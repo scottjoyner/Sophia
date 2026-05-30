@@ -43,6 +43,8 @@ def test_ui_session_refresh_patch_is_idempotent(tmp_path):
     assert "async function refreshMemorySync()" in patched
     assert "fetch('/graph/outbox/status')" in patched
     assert "refreshMemorySync()" in patched
+    assert "pending_total !== undefined" in patched
+    assert "data.due !== undefined" in patched
     assert "memory sync: Neo4j" in patched
     assert "Neo4j memory sync pending" in patched
     assert "Saved to sidecar and Neo4j memory" in patched
