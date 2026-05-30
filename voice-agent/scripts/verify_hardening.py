@@ -56,11 +56,24 @@ CHECKS = {
         "syncOfflineQueue",
         "form.append('client_capture_id', record.client_capture_id)",
     ],
+    "offline_reconciliation": [
+        "reconcileOfflineRecord(record)",
+        "applyServerCaptureResponse(record, data, source = 'upload')",
+        "fetch('/capture/by-client-id/'",
+        "status: 'reconciling'",
+        "reconciled_from: source",
+    ],
     "capture_idempotency": [
         "CaptureIdempotencyStore",
         "client_capture_id: str = Form",
         "capture_idempotency.get(client_capture_id_clean)",
         "capture_idempotency.put(client_capture_id_clean, capture_id, response_payload)",
+    ],
+    "capture_lookup_endpoint": [
+        '@app.get("/capture/by-client-id/{client_capture_id}")',
+        "async def capture_by_client_id(client_capture_id: str)",
+        '"found": False',
+        '"found": True',
     ],
 }
 
