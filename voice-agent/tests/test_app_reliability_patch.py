@@ -35,6 +35,8 @@ def test_app_reliability_patch_is_idempotent(tmp_path):
     assert "app.state.graph_outbox = graph_outbox" in patched
     assert "return build_readiness_report(config)" in patched
     assert '@app.get("/graph/outbox/status")' in patched
+    assert "graph_outbox.summary()" in patched
+    assert 'return {"ok": True, **graph_outbox.summary()}' in patched
     assert '@app.post("/graph/outbox/replay")' in patched
     assert '@app.get("/session/status")' in patched
     assert '@app.post("/session/clear")' in patched
