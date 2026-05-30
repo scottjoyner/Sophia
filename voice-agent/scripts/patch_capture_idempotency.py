@@ -19,6 +19,7 @@ from pathlib import Path
 APP_PATH = Path("voice-agent/src/voice_agent/server/app.py")
 PATCH_MARKER = "CaptureIdempotencyStore"
 CLIENT_ID_MARKER = "client_capture_id: str = Form"
+LOOKUP_ROUTE_MARKER = '@app.get("/capture/by-client-id/{client_capture_id}")'
 
 
 class PatchError(RuntimeError):
@@ -75,7 +76,7 @@ def ensure_client_capture_id(content: str) -> str:
     return content
 
 
-def patch_content(content: str) -> str:
+def patch_base_idempotency(content: str) -> str:
     if PATCH_MARKER in content:
         return content
 
@@ -135,6 +136,37 @@ def patch_content(content: str) -> str:
             "capture idempotency store response",
         )
 
+    return content
+
+
+def patch_lookup_route(content: str) -> str:
+    if LOOKUP_ROUTE_MARKER in content:
+        return content
+    if PATCH_MARKER not in content:
+        return content
+    route = """
+    @app.get("/capture/by-client-id/{client_capture_id}")
+    async def capture_by_client_id(client_capture_id: str) -> Dict[str, Any]:
+        client_capture_id_clean = CaptureIdempotencyStore.normalize_key(client_capture_id)
+        if not client_capture_id_clean:
+            raise HTTPException(status_code=400, detail="client_capture_id is required")
+        replay = capture_idempotency.get(client_capture_id_clean)
+        if not replay:
+            return {"ok": True, "found": False, "client_capture_id": client_capture_id_clean}
+        return {"ok": True, "found": True, "client_capture_id": client_capture_id_clean, "capture": replay}
+
+"""
+    return replace_once(
+        content,
+        """    @app.post("/capture")\n""",
+        route + "    @app.post(\"/capture\")\n",
+        "capture idempotency lookup route",
+    )
+
+
+def patch_content(content: str) -> str:
+    content = patch_base_idempotency(content)
+    content = patch_lookup_route(content)
     return content
 
 
