@@ -6,7 +6,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, List
 
 
 @dataclass(frozen=True)
@@ -133,6 +133,18 @@ class GraphOutbox:
             ).fetchall()
         return [self._row_to_item(row) for row in rows]
 
+    def due_count(self, *, now_ms: int | None = None) -> int:
+        now = self.now_ms() if now_ms is None else now_ms
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT count(*) AS n FROM pending_graph_writes
+                WHERE status IN ('pending', 'retry') AND next_attempt_ms <= ?
+                """,
+                (now,),
+            ).fetchone()
+        return int(row["n"] if row else 0)
+
     def mark_succeeded(self, item_id: str) -> None:
         now = self.now_ms()
         with self._connect() as conn:
@@ -167,6 +179,27 @@ class GraphOutbox:
             ).fetchall()
         return {str(row["status"]): int(row["n"]) for row in rows}
 
+    def summary(self) -> Dict[str, Any]:
+        counts = self.counts()
+        due = self.due_count()
+        pending_total = int(counts.get("pending", 0)) + int(counts.get("retry", 0))
+        return {
+            "counts": counts,
+            "due": due,
+            "pending_total": pending_total,
+            "healthy": pending_total == 0,
+        }
+
+    def prune_succeeded(self, *, older_than_ms: int = 7 * 24 * 60 * 60 * 1000, now_ms: int | None = None) -> int:
+        now = self.now_ms() if now_ms is None else now_ms
+        cutoff = now - max(0, older_than_ms)
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM pending_graph_writes WHERE status = 'succeeded' AND updated_at_ms < ?",
+                (cutoff,),
+            )
+            return cur.rowcount
+
     def _row_to_item(self, row: sqlite3.Row) -> GraphOutboxItem:
         return GraphOutboxItem(
             id=row["id"],
@@ -199,14 +232,17 @@ def replay_graph_outbox_items(
     Currently supports capture writes. Additional kinds should be added only when
     their completed memory model is Neo4j-first.
     """
+    due_items = outbox.list_due(limit=limit)
+    if not due_items:
+        return {"ok": True, "reason": "No due graph outbox items", "processed": 0, "succeeded": 0, "failed": 0, "errors": []}
     if not neo4j_password:
-        return {"ok": False, "reason": "Neo4j password not configured", "processed": 0, "succeeded": 0, "failed": 0}
+        return {"ok": False, "reason": "Neo4j password not configured", "processed": 0, "succeeded": 0, "failed": 0, "errors": []}
 
     from ..auth.neo4j_ingest import save_capture_to_neo4j
 
     processed = succeeded = failed = 0
     errors: List[Dict[str, str]] = []
-    for item in outbox.list_due(limit=limit):
+    for item in due_items:
         processed += 1
         try:
             if item.kind not in SUPPORTED_OUTBOX_KINDS:
