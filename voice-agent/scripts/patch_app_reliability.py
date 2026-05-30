@@ -18,7 +18,8 @@ Run from repository root:
 
 The patcher is multi-phase and idempotent.  If an older version already applied
 the trusted-session/upload/readiness phase, this script will still apply the
-newer graph-outbox phase.
+newer graph-outbox phase and upgrade graph outbox status to the richer summary
+contract.
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ from pathlib import Path
 APP_PATH = Path("voice-agent/src/voice_agent/server/app.py")
 CORE_PATCH_MARKER = "TrustedSessionStore"
 OUTBOX_PATCH_MARKER = "GraphOutbox"
+OUTBOX_SUMMARY_PATCH_MARKER = "graph_outbox.summary()"
 
 
 class PatchError(RuntimeError):
@@ -93,47 +95,17 @@ def patch_core_reliability(content: str) -> str:
         "auth verify trusted session write",
     )
 
-    content = replace_once(
-        content,
-        """            suffix = _safe_upload_suffix(audio, default=".webm")\n""",
-        """            suffix = safe_upload_suffix(audio, default=".webm", policy=CAPTURE_AUDIO_POLICY)\n""",
-        "capture suffix guard",
-    )
-
-    content = replace_once(
-        content,
-        """            data = await audio.read()\n""",
-        """            data = await read_upload_with_limits(audio, CAPTURE_AUDIO_POLICY)\n""",
-        "capture size guard",
-    )
-
-    content = replace_once(
-        content,
-        """        suffix = _safe_upload_suffix(audio, default=".webm")\n""",
-        """        suffix = safe_upload_suffix(audio, default=".webm", policy=VOICEPRINT_AUDIO_POLICY)\n""",
-        "voiceprint enroll suffix guard",
-    )
-
-    content = replace_once(
-        content,
-        """        src_path.write_bytes(await audio.read())\n""",
-        """        src_path.write_bytes(await read_upload_with_limits(audio, VOICEPRINT_AUDIO_POLICY))\n""",
-        "voiceprint enroll size guard",
-    )
-
+    content = replace_once(content, """            suffix = _safe_upload_suffix(audio, default=".webm")\n""", """            suffix = safe_upload_suffix(audio, default=".webm", policy=CAPTURE_AUDIO_POLICY)\n""", "capture suffix guard")
+    content = replace_once(content, """            data = await audio.read()\n""", """            data = await read_upload_with_limits(audio, CAPTURE_AUDIO_POLICY)\n""", "capture size guard")
+    content = replace_once(content, """        suffix = _safe_upload_suffix(audio, default=".webm")\n""", """        suffix = safe_upload_suffix(audio, default=".webm", policy=VOICEPRINT_AUDIO_POLICY)\n""", "voiceprint enroll suffix guard")
+    content = replace_once(content, """        src_path.write_bytes(await audio.read())\n""", """        src_path.write_bytes(await read_upload_with_limits(audio, VOICEPRINT_AUDIO_POLICY))\n""", "voiceprint enroll size guard")
     content = replace_once(
         content,
         """        suffix = _safe_upload_suffix(audio, default=".wav")\n        audio_file = override_dir / f"{capture_id}{suffix}"\n        data = await audio.read()\n""",
         """        suffix = safe_upload_suffix(audio, default=".wav", policy=VOICEPRINT_AUDIO_POLICY)\n        audio_file = override_dir / f"{capture_id}{suffix}"\n        data = await read_upload_with_limits(audio, VOICEPRINT_AUDIO_POLICY)\n""",
         "owner override upload guard",
     )
-
-    content = replace_once(
-        content,
-        """        data = await audio.read()\n        asyncio.create_task(\n""",
-        """        data = await read_upload_with_limits(audio, MEETING_AUDIO_POLICY)\n        asyncio.create_task(\n""",
-        "meeting upload guard",
-    )
+    content = replace_once(content, """        data = await audio.read()\n        asyncio.create_task(\n""", """        data = await read_upload_with_limits(audio, MEETING_AUDIO_POLICY)\n        asyncio.create_task(\n""", "meeting upload guard")
 
     return content
 
@@ -142,31 +114,14 @@ def patch_graph_outbox(content: str) -> str:
     if OUTBOX_PATCH_MARKER in content:
         return content
 
-    content = replace_once(
-        content,
-        """from .readiness import build_readiness_report\n""",
-        """from .graph_outbox import GraphOutbox, replay_graph_outbox_items\nfrom .readiness import build_readiness_report\n""",
-        "graph outbox imports",
-    )
-
-    content = replace_once(
-        content,
-        """    trusted_sessions = TrustedSessionStore(Path(config.paths.artifacts_dir) / "trusted_sessions.sqlite")\n    app.state.config = config\n""",
-        """    trusted_sessions = TrustedSessionStore(Path(config.paths.artifacts_dir) / "trusted_sessions.sqlite")\n    graph_outbox = GraphOutbox(Path(config.paths.artifacts_dir) / "graph_outbox.sqlite")\n    app.state.config = config\n""",
-        "graph outbox store",
-    )
-
-    content = replace_once(
-        content,
-        """    app.state.trusted_sessions = trusted_sessions\n""",
-        """    app.state.trusted_sessions = trusted_sessions\n    app.state.graph_outbox = graph_outbox\n""",
-        "graph outbox app state",
-    )
+    content = replace_once(content, """from .readiness import build_readiness_report\n""", """from .graph_outbox import GraphOutbox, replay_graph_outbox_items\nfrom .readiness import build_readiness_report\n""", "graph outbox imports")
+    content = replace_once(content, """    trusted_sessions = TrustedSessionStore(Path(config.paths.artifacts_dir) / "trusted_sessions.sqlite")\n    app.state.config = config\n""", """    trusted_sessions = TrustedSessionStore(Path(config.paths.artifacts_dir) / "trusted_sessions.sqlite")\n    graph_outbox = GraphOutbox(Path(config.paths.artifacts_dir) / "graph_outbox.sqlite")\n    app.state.config = config\n""", "graph outbox store")
+    content = replace_once(content, """    app.state.trusted_sessions = trusted_sessions\n""", """    app.state.trusted_sessions = trusted_sessions\n    app.state.graph_outbox = graph_outbox\n""", "graph outbox app state")
 
     content = replace_once(
         content,
         """    @app.get("/session/status")\n""",
-        """    @app.get("/graph/outbox/status")\n    async def graph_outbox_status() -> Dict[str, Any]:\n        return {"ok": True, "counts": graph_outbox.counts()}\n\n    @app.post("/graph/outbox/replay")\n    async def graph_outbox_replay(limit: int = 25) -> Dict[str, Any]:\n        result = replay_graph_outbox_items(\n            graph_outbox,\n            neo4j_uri=config.neo4j.uri,\n            neo4j_user=config.neo4j.user,\n            neo4j_password=config.neo4j.password,\n            neo4j_database=config.neo4j.database,\n            limit=max(1, min(limit, 100)),\n        )\n        bus.publish("graph_outbox_replay", result)\n        return result\n\n    @app.get("/session/status")\n""",
+        """    @app.get("/graph/outbox/status")\n    async def graph_outbox_status() -> Dict[str, Any]:\n        return {"ok": True, **graph_outbox.summary()}\n\n    @app.post("/graph/outbox/replay")\n    async def graph_outbox_replay(limit: int = 25) -> Dict[str, Any]:\n        result = replay_graph_outbox_items(\n            graph_outbox,\n            neo4j_uri=config.neo4j.uri,\n            neo4j_user=config.neo4j.user,\n            neo4j_password=config.neo4j.password,\n            neo4j_database=config.neo4j.database,\n            limit=max(1, min(limit, 100)),\n        )\n        bus.publish("graph_outbox_replay", result)\n        return result\n\n    @app.get("/session/status")\n""",
         "graph outbox routes",
     )
 
@@ -191,19 +146,28 @@ def patch_graph_outbox(content: str) -> str:
         "capture graph outbox enqueue",
     )
 
-    content = replace_once(
-        content,
-        """            "graph_saved": graph_saved,\n            "graph_error": graph_error,\n""",
-        """            "graph_saved": graph_saved,\n            "graph_pending": graph_pending,\n            "graph_outbox_id": graph_outbox_id,\n            "graph_error": graph_error,\n""",
-        "capture graph pending payload fields",
-    )
+    content = replace_once(content, """            "graph_saved": graph_saved,\n            "graph_error": graph_error,\n""", """            "graph_saved": graph_saved,\n            "graph_pending": graph_pending,\n            "graph_outbox_id": graph_outbox_id,\n            "graph_error": graph_error,\n""", "capture graph pending payload fields")
 
     return content
+
+
+def patch_graph_outbox_summary(content: str) -> str:
+    if OUTBOX_SUMMARY_PATCH_MARKER in content:
+        return content
+    if "GraphOutbox" not in content:
+        return content
+    return replace_once(
+        content,
+        """        return {"ok": True, "counts": graph_outbox.counts()}\n""",
+        """        return {"ok": True, **graph_outbox.summary()}\n""",
+        "graph outbox summary status route",
+    )
 
 
 def patch_content(content: str) -> str:
     content = patch_core_reliability(content)
     content = patch_graph_outbox(content)
+    content = patch_graph_outbox_summary(content)
     return content
 
 
