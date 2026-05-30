@@ -25,12 +25,17 @@ def test_app_reliability_patch_is_idempotent(tmp_path):
     )
     patched = (target / "app.py").read_text(encoding="utf-8")
 
+    assert "from .graph_outbox import GraphOutbox, replay_graph_outbox_items" in patched
     assert "from .readiness import build_readiness_report" in patched
     assert "from .trusted_sessions import TrustedSessionStore" in patched
     assert "from .upload_limits import" in patched
     assert "trusted_sessions = TrustedSessionStore" in patched
+    assert "graph_outbox = GraphOutbox" in patched
     assert "app.state.trusted_sessions = trusted_sessions" in patched
+    assert "app.state.graph_outbox = graph_outbox" in patched
     assert "return build_readiness_report(config)" in patched
+    assert '@app.get("/graph/outbox/status")' in patched
+    assert '@app.post("/graph/outbox/replay")' in patched
     assert '@app.get("/session/status")' in patched
     assert '@app.post("/session/clear")' in patched
     assert "trusted_sessions.upsert" in patched
@@ -40,6 +45,10 @@ def test_app_reliability_patch_is_idempotent(tmp_path):
     assert "VOICEPRINT_AUDIO_POLICY" in patched
     assert "MEETING_AUDIO_POLICY" in patched
     assert "read_upload_with_limits(audio, MEETING_AUDIO_POLICY)" in patched
+    assert "graph_pending" in patched
+    assert "graph_outbox_id" in patched
+    assert "graph_outbox.enqueue" in patched
+    assert "idempotency_key=f\"capture:{capture_id}\"" in patched
 
     second = subprocess.run(
         [sys.executable, "voice-agent/scripts/patch_app_reliability.py"],
