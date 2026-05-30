@@ -66,40 +66,51 @@ def save_capture_to_neo4j(
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise RuntimeError("neo4j driver not installed") from exc
 
+    import json
+
+    metadata = metadata or {}
+    client_capture_id = str(metadata.get("client_capture_id") or "").strip()
+    capture_dedupe_key = f"client:{client_capture_id}" if client_capture_id else f"server:{capture_id}"
+    transcript_id = f"{capture_dedupe_key}:transcript"
+
     driver = GraphDatabase.driver(uri, auth=(user, password))
     query = """
     MERGE (speaker:Speaker {user_id: $user_id})
-      ON CREATE SET speaker.name = $user_id
+      ON CREATE SET speaker.name = $user_id,
+                    speaker.created_at = datetime()
     MERGE (audio:Audio {path: $audio_path})
       ON CREATE SET audio.created_at = datetime()
     SET audio.content_type = $content_type,
         audio.duration_ms = $duration_ms,
-        audio.source = 'sophia_mobile_capture'
-    CREATE (capture:SophiaCapture {
-        capture_id: $capture_id,
-        transcript: $transcript,
-        audio_path: $audio_path,
-        content_type: $content_type,
-        duration_ms: $duration_ms,
-        source: 'sophia_mobile_capture',
-        metadata_json: $metadata_json,
-        context_json: $context_json,
-        device_id: $device_id,
-        device_fingerprint: $device_fingerprint,
-        client_ip: $client_ip,
-        user_agent: $user_agent,
-        language: $language,
-        timezone: $timezone,
-        platform: $platform,
-        location_lat: $location_lat,
-        location_lng: $location_lng,
-        location_accuracy_m: $location_accuracy_m,
-        activity_context: $activity_context,
-        intent: $intent,
-        intent_confidence: $intent_confidence,
-        intent_source: $intent_source,
-        created_at: datetime()
-    })
+        audio.source = 'sophia_mobile_capture',
+        audio.updated_at = datetime()
+    MERGE (capture:SophiaCapture {dedupe_key: $capture_dedupe_key})
+      ON CREATE SET capture.created_at = datetime(),
+                    capture.first_capture_id = $capture_id
+    SET capture.capture_id = $capture_id,
+        capture.client_capture_id = $client_capture_id,
+        capture.transcript = $transcript,
+        capture.audio_path = $audio_path,
+        capture.content_type = $content_type,
+        capture.duration_ms = $duration_ms,
+        capture.source = 'sophia_mobile_capture',
+        capture.metadata_json = $metadata_json,
+        capture.context_json = $context_json,
+        capture.device_id = $device_id,
+        capture.device_fingerprint = $device_fingerprint,
+        capture.client_ip = $client_ip,
+        capture.user_agent = $user_agent,
+        capture.language = $language,
+        capture.timezone = $timezone,
+        capture.platform = $platform,
+        capture.location_lat = $location_lat,
+        capture.location_lng = $location_lng,
+        capture.location_accuracy_m = $location_accuracy_m,
+        capture.activity_context = $activity_context,
+        capture.intent = $intent,
+        capture.intent_confidence = $intent_confidence,
+        capture.intent_source = $intent_source,
+        capture.updated_at = datetime()
     MERGE (speaker)-[:RECORDED]->(audio)
     MERGE (audio)-[:CAPTURED_AS]->(capture)
     WITH speaker, audio, capture
@@ -117,16 +128,16 @@ def save_capture_to_neo4j(
     )
     WITH speaker, capture
     FOREACH (_ IN CASE WHEN $transcript <> '' THEN [1] ELSE [] END |
-      CREATE (transcript:Transcript {
-          text: $transcript,
-          source: 'sophia_mobile_capture',
-          created_at: datetime()
-      })
-      CREATE (speaker)-[:SAID]->(transcript)
-      CREATE (transcript)-[:CAPTURED_IN]->(capture)
+      MERGE (transcript:Transcript {id: $transcript_id})
+        ON CREATE SET transcript.created_at = datetime()
+      SET transcript.text = $transcript,
+          transcript.source = 'sophia_mobile_capture',
+          transcript.capture_dedupe_key = $capture_dedupe_key,
+          transcript.updated_at = datetime()
+      MERGE (speaker)-[:SAID]->(transcript)
+      MERGE (transcript)-[:CAPTURED_IN]->(capture)
     )
     """
-    import json
 
     with driver.session(database=database) as session:
         context = context or {}
@@ -134,11 +145,14 @@ def save_capture_to_neo4j(
             query,
             user_id=user_id,
             capture_id=capture_id,
+            client_capture_id=client_capture_id,
+            capture_dedupe_key=capture_dedupe_key,
+            transcript_id=transcript_id,
             transcript=transcript,
             audio_path=audio_path,
             content_type=content_type,
             duration_ms=duration_ms,
-            metadata_json=json.dumps(metadata or {}, ensure_ascii=False),
+            metadata_json=json.dumps(metadata, ensure_ascii=False),
             context_json=json.dumps(context, ensure_ascii=False),
             device_id=str(context.get("device_id") or ""),
             device_fingerprint=str(context.get("device_fingerprint") or ""),
