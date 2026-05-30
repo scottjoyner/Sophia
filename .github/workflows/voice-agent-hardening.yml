@@ -1,0 +1,68 @@
+name: voice-agent hardening
+
+on:
+  pull_request:
+    paths:
+      - "voice-agent/**"
+      - "docs/**"
+      - ".github/workflows/voice-agent-hardening.yml"
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - "voice-agent/**"
+      - "docs/**"
+      - ".github/workflows/voice-agent-hardening.yml"
+
+jobs:
+  hardening-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "voice-agent/pyproject.toml"
+
+      - name: Install voice-agent dev dependencies
+        working-directory: voice-agent
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run focused hardening tests
+        working-directory: voice-agent
+        run: |
+          pytest \
+            tests/test_apply_hardening_patches.py \
+            tests/test_verify_hardening.py \
+            tests/test_request_hardening.py \
+            tests/test_request_hardening_patch.py \
+            tests/test_rate_limits.py \
+            tests/test_rate_limit_patch.py \
+            tests/test_upload_limits.py \
+            tests/test_trusted_sessions.py \
+            tests/test_graph_outbox.py \
+            tests/test_replay_graph_outbox_script.py \
+            tests/test_capture_idempotency.py \
+            tests/test_capture_idempotency_patch.py \
+            tests/test_neo4j_capture_idempotency.py \
+            tests/test_neo4j_schema.py \
+            tests/test_offline_browser_queue_patch.py \
+            tests/test_app_reliability_patch.py \
+            tests/test_ui_session_refresh_patch.py
+
+      - name: Verify patch orchestrator dry run
+        run: |
+          python voice-agent/scripts/apply_hardening_patches.py --dry-run
+
+      - name: Verify unpatched app hardening report is callable
+        run: |
+          python voice-agent/scripts/verify_hardening.py --json || true
