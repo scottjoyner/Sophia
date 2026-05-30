@@ -1,3 +1,30 @@
+x-sophia-env: &sophia-env
+  # When Hermes exposes an OpenAI-compatible endpoint, switch config llm.provider to hermes
+  # and point base_url at the reachable host from this container.
+  SOPHIA_VOICE_URL: http://127.0.0.1:8765
+  NEO4J_URI: ${NEO4J_URI:-bolt://host.docker.internal:7687}
+  NEO4J_USER: ${NEO4J_USER:-neo4j}
+  NEO4J_PASSWORD: ${NEO4J_PASSWORD:-}
+  NEO4J_PASSWORD_FILE: ${NEO4J_PASSWORD_FILE:-/run/secrets/neo4j_password}
+  NEO4J_DATABASE: ${NEO4J_DATABASE:-memory}
+  NEO4J_DEFAULT_SPEAKER: ${NEO4J_DEFAULT_SPEAKER:-}
+  SOPHIA_CAPTURE_DIR: ${SOPHIA_CAPTURE_DIR:-/captures}
+  SOPHIA_INTENT_PROVIDER: ${SOPHIA_INTENT_PROVIDER:-mock}
+  SOPHIA_INTENT_BASE_URL: ${SOPHIA_INTENT_BASE_URL:-}
+  SOPHIA_INTENT_API_KEY: ${SOPHIA_INTENT_API_KEY:-}
+  SOPHIA_INTENT_MODEL: ${SOPHIA_INTENT_MODEL:-draft-model}
+  SOPHIA_OWNER_OVERRIDE_ENABLED: ${SOPHIA_OWNER_OVERRIDE_ENABLED:-true}
+  SOPHIA_OWNER_OVERRIDE_TOKEN: ${SOPHIA_OWNER_OVERRIDE_TOKEN:-}
+  TORCH_HUB_TRUSTED_REPOS: snakers4/silero-vad
+  COQUI_TOS_AGREED: "1"
+
+x-sophia-volumes: &sophia-volumes
+  - sophia_voice_data:/data
+  - /media/scott/NAS1/fileserver/audio/sophia-captures:/captures
+  - /mnt/S/sophia-ingest:/ssd-ingest
+  - /media/scott/NAS1/fileserver:/nas-fileserver:ro
+  - /home/scott/.config/sophia/neo4j_password:/run/secrets/neo4j_password:ro
+
 services:
   sophia-voice:
     build:
@@ -6,38 +33,39 @@ services:
         INSTALL_VOICE_INSIGHT_DEPS: 1
     ports:
       - "8765:8765"
-    environment:
-      # When Hermes exposes an OpenAI-compatible endpoint, switch config llm.provider to hermes
-      # and point base_url at the reachable host from this container.
-      SOPHIA_VOICE_URL: http://127.0.0.1:8765
-      NEO4J_URI: ${NEO4J_URI:-bolt://host.docker.internal:7687}
-      NEO4J_USER: ${NEO4J_USER:-neo4j}
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-}
-      NEO4J_PASSWORD_FILE: ${NEO4J_PASSWORD_FILE:-/run/secrets/neo4j_password}
-      NEO4J_DATABASE: ${NEO4J_DATABASE:-memory}
-      NEO4J_DEFAULT_SPEAKER: ${NEO4J_DEFAULT_SPEAKER:-}
-      SOPHIA_CAPTURE_DIR: ${SOPHIA_CAPTURE_DIR:-/captures}
-      SOPHIA_INTENT_PROVIDER: ${SOPHIA_INTENT_PROVIDER:-mock}
-      SOPHIA_INTENT_BASE_URL: ${SOPHIA_INTENT_BASE_URL:-}
-      SOPHIA_INTENT_API_KEY: ${SOPHIA_INTENT_API_KEY:-}
-      SOPHIA_INTENT_MODEL: ${SOPHIA_INTENT_MODEL:-draft-model}
-      SOPHIA_OWNER_OVERRIDE_ENABLED: ${SOPHIA_OWNER_OVERRIDE_ENABLED:-true}
-      SOPHIA_OWNER_OVERRIDE_TOKEN: ${SOPHIA_OWNER_OVERRIDE_TOKEN:-}
-      TORCH_HUB_TRUSTED_REPOS: snakers4/silero-vad
-      COQUI_TOS_AGREED: "1"
+    environment: *sophia-env
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    volumes:
-      - sophia_voice_data:/data
-      - /media/scott/NAS1/fileserver/audio/sophia-captures:/captures
-      - /mnt/S/sophia-ingest:/ssd-ingest
-      - /media/scott/NAS1/fileserver:/nas-fileserver:ro
-      - /home/scott/.config/sophia/neo4j_password:/run/secrets/neo4j_password:ro
+    volumes: *sophia-volumes
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8765/healthz"]
       interval: 30s
       timeout: 3s
       retries: 3
+
+  graph-outbox-worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      args:
+        INSTALL_VOICE_INSIGHT_DEPS: 1
+    command:
+      - python
+      - scripts/run_graph_outbox_worker.py
+      - --config
+      - configs/container.yaml
+      - --artifacts-dir
+      - /data
+      - --interval-seconds
+      - "30"
+      - --json
+    environment: *sophia-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes: *sophia-volumes
+    restart: unless-stopped
+    depends_on:
+      - sophia-voice
 
 volumes:
   sophia_voice_data:
