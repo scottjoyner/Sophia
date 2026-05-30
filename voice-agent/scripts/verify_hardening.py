@@ -56,6 +56,16 @@ CHECKS = {
         "syncOfflineQueue",
         "form.append('client_capture_id', record.client_capture_id)",
     ],
+    "offline_storage_risk": [
+        "OFFLINE_WARN_QUEUE_MB",
+        "OFFLINE_MAX_QUEUE_MB",
+        'id="offlineProtectStorageBtn"',
+        "requestOfflineStoragePersistence",
+        "navigator.storage.persist",
+        "navigator.storage.persisted",
+        "STORAGE RISK",
+        "offline queue: storage risk",
+    ],
     "offline_reconciliation": [
         "reconcileOfflineRecord(record)",
         "applyServerCaptureResponse(record, data, source = 'upload')",
