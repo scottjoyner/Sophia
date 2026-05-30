@@ -1,5 +1,4 @@
 from pathlib import Path
-import runpy
 import shutil
 import subprocess
 import sys
@@ -38,6 +37,15 @@ def test_ui_session_refresh_patch_is_idempotent(tmp_path):
     assert "window.addEventListener('focus', refreshTopStatus)" in patched
     assert "if (mode === 'auto')" in patched
     assert "verifyVoice('manual')" in patched
+
+    assert 'id="memorySync"' in patched
+    assert "function setMemorySyncPill(state, text)" in patched
+    assert "async function refreshMemorySync()" in patched
+    assert "fetch('/graph/outbox/status')" in patched
+    assert "refreshMemorySync()" in patched
+    assert "memory sync: Neo4j" in patched
+    assert "Neo4j memory sync pending" in patched
+    assert "Saved to sidecar and Neo4j memory" in patched
 
     second = subprocess.run(
         [sys.executable, "voice-agent/scripts/patch_ui_session_refresh.py"],
