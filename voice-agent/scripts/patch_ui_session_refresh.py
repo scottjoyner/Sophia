@@ -19,8 +19,8 @@ Run from repository root:
     python voice-agent/scripts/patch_ui_session_refresh.py
 
 The script is intentionally idempotent.  It is multi-phase: if the auth-session
-patch was already applied by an older version, this script can still apply the
-newer memory-sync UI patch.
+patch was already applied by an older version, this script can still apply or
+upgrade the newer memory-sync UI patch.
 """
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ from pathlib import Path
 APP_PATH = Path("voice-agent/src/voice_agent/server/app.py")
 AUTH_PATCH_MARKER = "sophia_auth_session_v1"
 MEMORY_SYNC_PATCH_MARKER = "memorySync"
+MEMORY_SYNC_SUMMARY_MARKER = "pending_total !== undefined"
 
 
 class PatchError(RuntimeError):
@@ -112,39 +113,46 @@ def patch_auth_session_ui(content: str) -> str:
     return content
 
 
+def memory_sync_refresh_js() -> str:
+    return """  function setMemorySyncPill(state, text) {\n    const el = document.getElementById('memorySync');\n    if (!el) return;\n    el.textContent = text;\n    el.style.borderColor = state === 'ok' ? '#34d399' : (state === 'pending' ? '#fbbf24' : '#fb7185');\n    el.style.color = state === 'ok' ? '#6ee7b7' : (state === 'pending' ? '#fcd34d' : '#fda4af');\n  }\n\n  async function refreshMemorySync() {\n    try {\n      const res = await fetch('/graph/outbox/status');\n      const data = await res.json();\n      if (!res.ok || data.ok === false) throw new Error(data.detail || 'memory sync unavailable');\n      const counts = data.counts || {};\n      const pending_total = data.pending_total !== undefined ? Number(data.pending_total || 0) : ((counts.pending || 0) + (counts.retry || 0));\n      const due = data.due !== undefined ? Number(data.due || 0) : pending_total;\n      const failed = counts.failed || 0;\n      if (pending_total > 0) {\n        const dueLabel = due > 0 ? ' / ' + due + ' due' : '';\n        setMemorySyncPill('pending', 'memory sync: ' + pending_total + ' pending' + dueLabel);\n      } else if (failed > 0) setMemorySyncPill('fail', 'memory sync: ' + failed + ' failed');\n      else setMemorySyncPill('ok', 'memory sync: Neo4j');\n    } catch {\n      setMemorySyncPill('fail', 'memory sync: unknown');\n    }\n  }\n"""
+
+
 def patch_memory_sync_ui(content: str) -> str:
-    if MEMORY_SYNC_PATCH_MARKER in content:
+    if MEMORY_SYNC_PATCH_MARKER not in content:
+        content = replace_once(
+            content,
+            """      <div id="graph" class="pill graph">graph ...</div>\n      <div id="authStatus" class="pill auth idle">voice: idle</div>\n""",
+            """      <div id="graph" class="pill graph">graph ...</div>\n      <div id="memorySync" class="pill">memory sync ...</div>\n      <div id="authStatus" class="pill auth idle">voice: idle</div>\n""",
+            "memory sync header pill",
+        )
+
+        content = replace_once(
+            content,
+            """  async function refreshEventLog() {\n""",
+            memory_sync_refresh_js() + "\n  async function refreshEventLog() {\n",
+            "memory sync refresh function",
+        )
+
+        content = replace_once(
+            content,
+            """    await Promise.allSettled([refreshGraph(), refreshStatus()]);\n""",
+            """    await Promise.allSettled([refreshGraph(), refreshStatus(), refreshMemorySync()]);\n""",
+            "memory sync top refresh",
+        )
+
+        content = replace_once(
+            content,
+            """    saveStatus.textContent = data.graph_saved ? 'Saved to sidecar and Neo4j.' : 'Saved locally; graph not written.';\n""",
+            """    if (data.graph_saved) saveStatus.textContent = 'Saved to sidecar and Neo4j memory.';\n    else if (data.graph_pending) saveStatus.textContent = 'Saved locally; Neo4j memory sync pending.';\n    else saveStatus.textContent = 'Saved locally; graph not written.';\n    await refreshMemorySync();\n""",
+            "capture save memory sync message",
+        )
         return content
 
-    content = replace_once(
-        content,
-        """      <div id="graph" class="pill graph">graph ...</div>\n      <div id="authStatus" class="pill auth idle">voice: idle</div>\n""",
-        """      <div id="graph" class="pill graph">graph ...</div>\n      <div id="memorySync" class="pill">memory sync ...</div>\n      <div id="authStatus" class="pill auth idle">voice: idle</div>\n""",
-        "memory sync header pill",
-    )
+    if MEMORY_SYNC_SUMMARY_MARKER in content:
+        return content
 
-    content = replace_once(
-        content,
-        """  async function refreshEventLog() {\n""",
-        """  function setMemorySyncPill(state, text) {\n    const el = document.getElementById('memorySync');\n    if (!el) return;\n    el.textContent = text;\n    el.style.borderColor = state === 'ok' ? '#34d399' : (state === 'pending' ? '#fbbf24' : '#fb7185');\n    el.style.color = state === 'ok' ? '#6ee7b7' : (state === 'pending' ? '#fcd34d' : '#fda4af');\n  }\n\n  async function refreshMemorySync() {\n    try {\n      const res = await fetch('/graph/outbox/status');\n      const data = await res.json();\n      if (!res.ok || data.ok === false) throw new Error(data.detail || 'memory sync unavailable');\n      const counts = data.counts || {};\n      const pending = (counts.pending || 0) + (counts.retry || 0);\n      const failed = counts.failed || 0;\n      if (pending > 0) setMemorySyncPill('pending', 'memory sync: ' + pending + ' pending');\n      else if (failed > 0) setMemorySyncPill('fail', 'memory sync: ' + failed + ' failed');\n      else setMemorySyncPill('ok', 'memory sync: Neo4j');\n    } catch {\n      setMemorySyncPill('fail', 'memory sync: unknown');\n    }\n  }\n\n  async function refreshEventLog() {\n""",
-        "memory sync refresh function",
-    )
-
-    content = replace_once(
-        content,
-        """    await Promise.allSettled([refreshGraph(), refreshStatus()]);\n""",
-        """    await Promise.allSettled([refreshGraph(), refreshStatus(), refreshMemorySync()]);\n""",
-        "memory sync top refresh",
-    )
-
-    content = replace_once(
-        content,
-        """    saveStatus.textContent = data.graph_saved ? 'Saved to sidecar and Neo4j.' : 'Saved locally; graph not written.';\n""",
-        """    if (data.graph_saved) saveStatus.textContent = 'Saved to sidecar and Neo4j memory.';\n    else if (data.graph_pending) saveStatus.textContent = 'Saved locally; Neo4j memory sync pending.';\n    else saveStatus.textContent = 'Saved locally; graph not written.';\n    await refreshMemorySync();\n""",
-        "capture save memory sync message",
-    )
-
-    return content
+    old = """  function setMemorySyncPill(state, text) {\n    const el = document.getElementById('memorySync');\n    if (!el) return;\n    el.textContent = text;\n    el.style.borderColor = state === 'ok' ? '#34d399' : (state === 'pending' ? '#fbbf24' : '#fb7185');\n    el.style.color = state === 'ok' ? '#6ee7b7' : (state === 'pending' ? '#fcd34d' : '#fda4af');\n  }\n\n  async function refreshMemorySync() {\n    try {\n      const res = await fetch('/graph/outbox/status');\n      const data = await res.json();\n      if (!res.ok || data.ok === false) throw new Error(data.detail || 'memory sync unavailable');\n      const counts = data.counts || {};\n      const pending = (counts.pending || 0) + (counts.retry || 0);\n      const failed = counts.failed || 0;\n      if (pending > 0) setMemorySyncPill('pending', 'memory sync: ' + pending + ' pending');\n      else if (failed > 0) setMemorySyncPill('fail', 'memory sync: ' + failed + ' failed');\n      else setMemorySyncPill('ok', 'memory sync: Neo4j');\n    } catch {\n      setMemorySyncPill('fail', 'memory sync: unknown');\n    }\n  }\n"""
+    return replace_once(content, old, memory_sync_refresh_js(), "memory sync summary upgrade")
 
 
 def patch_content(content: str) -> str:
