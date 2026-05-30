@@ -258,13 +258,7 @@ def offline_queue_js() -> str:
     captureCount.textContent = count + ' capture' + (count !== 1 ? 's' : '') + ' saved';
   }
 
-  async function syncOfflineRecord(record, { force = false } = {}) {
-    if (!force && record.next_retry_at_ms && record.next_retry_at_ms > Date.now()) return record;
-    if (!(await canReachSophia())) throw new Error('Sophia service is not reachable');
-    await patchOfflineRecording(record.client_capture_id, { status: 'uploading', last_error: '' });
-    const res = await fetch('/capture', { method: 'POST', body: captureRecordToForm(record) });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || data.error || 'Upload failed');
+  async function applyServerCaptureResponse(record, data, source = 'upload') {
     incrementCaptureCountOnce(record);
     const status = data.graph_saved ? 'synced_to_neo4j' : (data.graph_pending ? 'server_graph_pending' : 'uploaded_to_sidecar');
     const updated = await patchOfflineRecording(record.client_capture_id, {
@@ -276,9 +270,34 @@ def offline_queue_js() -> str:
       graph_outbox_id: data.graph_outbox_id || null,
       local_delete_allowed: Boolean(data.graph_saved),
       last_error: data.graph_error || '',
+      reconciled_from: source,
     });
     latest.textContent = JSON.stringify(data, null, 2);
     return updated;
+  }
+
+  async function reconcileOfflineRecord(record) {
+    try {
+      const res = await fetch('/capture/by-client-id/' + encodeURIComponent(record.client_capture_id), { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.found && data.capture) {
+        return applyServerCaptureResponse(record, data.capture, 'client_lookup');
+      }
+    } catch {}
+    return null;
+  }
+
+  async function syncOfflineRecord(record, { force = false } = {}) {
+    if (!force && record.next_retry_at_ms && record.next_retry_at_ms > Date.now()) return record;
+    if (!(await canReachSophia())) throw new Error('Sophia service is not reachable');
+    await patchOfflineRecording(record.client_capture_id, { status: 'reconciling', last_error: '' });
+    const reconciled = await reconcileOfflineRecord(record);
+    if (reconciled) return reconciled;
+    await patchOfflineRecording(record.client_capture_id, { status: 'uploading', last_error: '' });
+    const res = await fetch('/capture', { method: 'POST', body: captureRecordToForm(record) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || data.error || 'Upload failed');
+    return applyServerCaptureResponse(record, data, 'upload');
   }
 
   async function syncOfflineQueue({ force = false } = {}) {
