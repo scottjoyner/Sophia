@@ -85,6 +85,14 @@ CHECKS = {
         '"found": False',
         '"found": True',
     ],
+    "offline_diagnostics": [
+        '@app.get("/diagnostics/offline")',
+        "async def offline_diagnostics()",
+        "capture_idempotency.summary()",
+        "idempotency_pruned",
+        "browser_indexeddb",
+        "durable Sophia memory brain",
+    ],
 }
 
 # Some checks need alternative markers because the concrete import line is enough.
