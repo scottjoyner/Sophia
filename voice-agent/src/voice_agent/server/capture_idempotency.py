@@ -103,6 +103,32 @@ class CaptureIdempotencyStore:
                 (key, capture_id, response_json, now, now, expires),
             )
 
+    def counts(self) -> Dict[str, int]:
+        now = self.now_ms()
+        with self._connect() as conn:
+            row = conn.execute("SELECT count(*) AS n FROM capture_idempotency").fetchone()
+            active = conn.execute(
+                "SELECT count(*) AS n FROM capture_idempotency WHERE expires_at_ms > ?",
+                (now,),
+            ).fetchone()
+            expired = conn.execute(
+                "SELECT count(*) AS n FROM capture_idempotency WHERE expires_at_ms <= ?",
+                (now,),
+            ).fetchone()
+        return {
+            "total": int(row["n"] if row else 0),
+            "active": int(active["n"] if active else 0),
+            "expired": int(expired["n"] if expired else 0),
+        }
+
+    def summary(self) -> Dict[str, Any]:
+        counts = self.counts()
+        return {
+            "counts": counts,
+            "healthy": counts["expired"] == 0,
+            "ttl_ms": self.ttl_ms,
+        }
+
     def prune_expired(self) -> int:
         now = self.now_ms()
         with self._connect() as conn:
