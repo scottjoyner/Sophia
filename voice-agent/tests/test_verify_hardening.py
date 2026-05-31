@@ -19,6 +19,7 @@ def test_verify_hardening_json_reports_groups():
     assert "ok" in payload
     assert "groups" in payload
     assert "offline_browser_queue" in payload["groups"]
+    assert "offline_storage_risk" in payload["groups"]
     assert "offline_reconciliation" in payload["groups"]
     assert "capture_idempotency" in payload["groups"]
     assert "capture_lookup_endpoint" in payload["groups"]
@@ -56,6 +57,14 @@ def test_verify_hardening_can_pass_with_all_markers(tmp_path):
                 "saveOfflineFirst",
                 "syncOfflineQueue",
                 "form.append('client_capture_id', record.client_capture_id)",
+                "OFFLINE_WARN_QUEUE_MB",
+                "OFFLINE_MAX_QUEUE_MB",
+                'id="offlineProtectStorageBtn"',
+                "requestOfflineStoragePersistence",
+                "navigator.storage.persist",
+                "navigator.storage.persisted",
+                "STORAGE RISK",
+                "offline queue: storage risk",
                 "reconcileOfflineRecord(record)",
                 "applyServerCaptureResponse(record, data, source = 'upload')",
                 "fetch('/capture/by-client-id/'",
