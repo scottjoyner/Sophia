@@ -27,6 +27,7 @@ PATCH_SCRIPTS = [
     "patch_request_hardening.py",
     "patch_rate_limits.py",
     "patch_offline_browser_queue.py",
+    "patch_offline_storage_risk.py",
     "patch_capture_idempotency.py",
 ]
 
