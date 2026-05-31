@@ -22,6 +22,7 @@ def test_apply_hardening_patches_dry_run_lists_order():
         "patch_request_hardening.py",
         "patch_rate_limits.py",
         "patch_offline_browser_queue.py",
+        "patch_offline_storage_risk.py",
         "patch_capture_idempotency.py",
     ]
     positions = [out.index(name) for name in expected]
@@ -34,5 +35,7 @@ def test_apply_hardening_patches_declares_patch_order():
 
     assert "PATCH_ORDER" in content
     assert "patch_app_reliability.py" in content
+    assert "patch_offline_storage_risk.py" in content
     assert "patch_capture_idempotency.py" in content
-    assert content.index("patch_app_reliability.py") < content.index("patch_capture_idempotency.py")
+    assert content.index("patch_offline_browser_queue.py") < content.index("patch_offline_storage_risk.py")
+    assert content.index("patch_offline_storage_risk.py") < content.index("patch_capture_idempotency.py")
