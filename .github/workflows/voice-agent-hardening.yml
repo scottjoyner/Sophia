@@ -57,6 +57,7 @@ jobs:
             tests/test_neo4j_schema.py \
             tests/test_offline_browser_queue_patch.py \
             tests/test_offline_storage_risk_patch.py \
+            tests/test_offline_diagnostics_patch.py \
             tests/test_app_reliability_patch.py \
             tests/test_ui_session_refresh_patch.py
 
