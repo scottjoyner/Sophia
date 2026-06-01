@@ -30,8 +30,8 @@ def test_graph_capture_reconciliation_patch_after_capture_idempotency(tmp_path):
 
     patched = (target / "app.py").read_text(encoding="utf-8")
     assert "lookup_capture_by_client_capture_id" in patched
-    assert "source": "neo4j" or "neo4j" in patched
-    assert "source": "idempotency_cache" or "idempotency_cache" in patched
+    assert '"source": "neo4j"' in patched
+    assert '"source": "idempotency_cache"' in patched
     assert "capture_idempotency.put(client_capture_id_clean" in patched
     assert "graph_lookup.get(\"found\")" in patched
 
