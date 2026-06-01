@@ -2,12 +2,7 @@
 """Check the full Sophia hardening patch pipeline in a disposable workspace.
 
 This script copies only the files needed to patch `app.py`, applies the full
-hardening patch sequence to the copy, then verifies the patched result. It does
-ot modify the developer working tree.
-
-Run from repository root:
-
-    python voice-agent/scripts/check_patch_pipeline.py
+hardening patch sequence to the copy, then verifies the patched result.
 """
 from __future__ import annotations
 
@@ -28,6 +23,7 @@ PATCH_SCRIPTS = [
     "patch_rate_limits.py",
     "patch_offline_browser_queue.py",
     "patch_offline_storage_risk.py",
+    "patch_ui_offline_diagnostics.py",
     "patch_capture_idempotency.py",
     "patch_graph_capture_reconciliation.py",
     "patch_offline_diagnostics.py",
