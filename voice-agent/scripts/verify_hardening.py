@@ -66,6 +66,14 @@ CHECKS = {
         "STORAGE RISK",
         "offline queue: storage risk",
     ],
+    "ui_offline_diagnostics": [
+        "offlineDiagnosticsPanel",
+        "offlineDiagnosticsRefreshBtn",
+        "offlineDiagnosticsJson",
+        "refreshOfflineDiagnostics",
+        "installOfflineDiagnosticsHandlers",
+        "fetch('/diagnostics/offline'",
+    ],
     "offline_reconciliation": [
         "reconcileOfflineRecord(record)",
         "applyServerCaptureResponse(record, data, source = 'upload')",
@@ -101,7 +109,6 @@ CHECKS = {
     ],
 }
 
-# Some checks need alternative markers because the concrete import line is enough.
 ALTERNATES = {
     "request_hardening import": ["from .request_hardening import install_request_hardening"],
 }
