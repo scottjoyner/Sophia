@@ -85,6 +85,12 @@ CHECKS = {
         '"found": False',
         '"found": True',
     ],
+    "graph_capture_reconciliation": [
+        "lookup_capture_by_client_capture_id",
+        '"source": "neo4j"',
+        '"source": "idempotency_cache"',
+        "graph_lookup.get(\"found\")",
+    ],
     "offline_diagnostics": [
         '@app.get("/diagnostics/offline")',
         "async def offline_diagnostics()",
