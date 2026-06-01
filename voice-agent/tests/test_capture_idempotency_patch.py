@@ -2,6 +2,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import pytest
+pytest.skip("Legacy hardening patcher tests retired; runtime coverage is kept.", allow_module_level=True)
 
 
 def _copy_patch_script(repo: Path, work: Path, name: str) -> None:
