@@ -23,6 +23,7 @@ def test_verify_hardening_json_reports_groups():
     assert "offline_reconciliation" in payload["groups"]
     assert "capture_idempotency" in payload["groups"]
     assert "capture_lookup_endpoint" in payload["groups"]
+    assert "offline_diagnostics" in payload["groups"]
 
 
 def test_verify_hardening_can_pass_with_all_markers(tmp_path):
@@ -78,6 +79,12 @@ def test_verify_hardening_can_pass_with_all_markers(tmp_path):
                 "async def capture_by_client_id(client_capture_id: str)",
                 '"found": False',
                 '"found": True',
+                '@app.get("/diagnostics/offline")',
+                "async def offline_diagnostics()",
+                "capture_idempotency.summary()",
+                "idempotency_pruned",
+                "browser_indexeddb",
+                "durable Sophia memory brain",
             ]
         ),
         encoding="utf-8",
