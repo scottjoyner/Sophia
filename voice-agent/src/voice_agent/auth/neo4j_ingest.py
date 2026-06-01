@@ -172,6 +172,62 @@ def save_capture_to_neo4j(
     driver.close()
 
 
+def lookup_capture_by_client_capture_id(
+    uri: str,
+    user: str,
+    password: str,
+    *,
+    client_capture_id: str,
+    database: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Look up a SophiaCapture in Neo4j by browser client_capture_id.
+
+    Used by offline browser queue reconciliation after a graph outbox replay may
+    have completed in the background.
+    """
+    clean = (client_capture_id or "").strip()[:128]
+    if not clean:
+        return {"ok": False, "found": False, "error": "client_capture_id is required"}
+    if not password:
+        return {"ok": False, "found": False, "error": "Neo4j password not configured", "client_capture_id": clean}
+    try:
+        from neo4j import GraphDatabase
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise RuntimeError("neo4j driver not installed") from exc
+
+    driver = GraphDatabase.driver(uri, auth=(user, password))
+    try:
+        with driver.session(database=database) as session:
+            record = session.run(
+                """
+                MATCH (capture:SophiaCapture {dedupe_key: $dedupe_key})
+                RETURN capture.capture_id AS capture_id,
+                       capture.client_capture_id AS client_capture_id,
+                       capture.audio_path AS audio_path,
+                       capture.transcript AS transcript,
+                       capture.updated_at AS updated_at
+                LIMIT 1
+                """,
+                dedupe_key=f"client:{clean}",
+            ).single()
+    finally:
+        driver.close()
+
+    if not record:
+        return {"ok": True, "found": False, "client_capture_id": clean}
+    return {
+        "ok": True,
+        "found": True,
+        "client_capture_id": clean,
+        "capture_id": record.get("capture_id"),
+        "audio_path": record.get("audio_path"),
+        "transcript": record.get("transcript") or "",
+        "graph_saved": True,
+        "graph_pending": False,
+        "updated_at": str(record.get("updated_at") or ""),
+    }
+
+
 def save_meeting_to_neo4j(
     uri: str,
     user: str,
