@@ -3,7 +3,7 @@
 
 This script copies only the files needed to patch `app.py`, applies the full
 hardening patch sequence to the copy, then verifies the patched result. It does
-not modify the developer working tree.
+ot modify the developer working tree.
 
 Run from repository root:
 
@@ -29,6 +29,7 @@ PATCH_SCRIPTS = [
     "patch_offline_browser_queue.py",
     "patch_offline_storage_risk.py",
     "patch_capture_idempotency.py",
+    "patch_graph_capture_reconciliation.py",
     "patch_offline_diagnostics.py",
 ]
 
