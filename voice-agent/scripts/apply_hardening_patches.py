@@ -28,6 +28,7 @@ PATCH_ORDER = [
     "patch_offline_browser_queue.py",
     "patch_offline_storage_risk.py",
     "patch_capture_idempotency.py",
+    "patch_graph_capture_reconciliation.py",
     "patch_offline_diagnostics.py",
 ]
 
