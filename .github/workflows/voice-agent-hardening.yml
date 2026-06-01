@@ -53,6 +53,7 @@ jobs:
             tests/test_replay_graph_outbox_script.py \
             tests/test_capture_idempotency.py \
             tests/test_capture_idempotency_patch.py \
+            tests/test_graph_capture_reconciliation_patch.py \
             tests/test_neo4j_capture_idempotency.py \
             tests/test_neo4j_schema.py \
             tests/test_offline_browser_queue_patch.py \
@@ -72,3 +73,29 @@ jobs:
       - name: Verify unpatched app hardening report is callable
         run: |
           python voice-agent/scripts/verify_hardening.py --json || true
+
+  browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "voice-agent/package.json"
+
+      - name: Install browser test dependencies
+        working-directory: voice-agent
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Run Playwright smoke tests
+        working-directory: voice-agent
+        run: |
+          npm run test:ui -- --project=chromium
