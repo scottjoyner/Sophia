@@ -29,6 +29,7 @@ PATCH_SCRIPTS = [
     "patch_offline_browser_queue.py",
     "patch_offline_storage_risk.py",
     "patch_capture_idempotency.py",
+    "patch_offline_diagnostics.py",
 ]
 
 
