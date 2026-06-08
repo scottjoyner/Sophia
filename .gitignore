@@ -3,3 +3,12 @@ deepspeech-0.9.3-models.scorer
 training/
 voice-agent/x1-370.tailcb8954.ts.net.key
 voice-agent/x1-370.tailcb8954.ts.net.crt
+.env
+voice-agent/.env
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+data/
+*.sqlite3
+*.sqlite3-journal
