@@ -678,34 +678,53 @@ CAPTURE_PAGE = """<!doctype html>
     { node_id: 'macbook-air', display_name: 'Scott’s MacBook Air', role: 'prefill / Sophia response prep', note: 'best for quick iteration and response drafting' },
   ];
 
-  function renderExecutionTrace(ack) {
+  async function renderExecutionTrace(ack) {
     if (!executionTrace) return;
-    const voice = lastAuthResult ? [
-      '1) Sophia voice-agent: voiceprint auth ' + (lastAuthResult.accepted ? 'accepted' : 'rejected') +
-        ' at ' + ((lastAuthResult.score || 0) * 100).toFixed(0) + '%',
-      '   • match source: ' + (lastAuthResult.match_source || 'active_head') +
-      (lastAuthResult.fallback_used ? ' (fallback)' : ''),
-      lastAuthResult.device_id ? '   • matched device: ' + lastAuthResult.device_id : '   • matched device: default identity',
-    ] : ['1) Sophia voice-agent: waiting for a verified voice clip'];
+    const lines = [];
 
-    const dispatch = ack ? [
-      '2) AssistX API: ' + (ack.sent ? 'accepted dispatch' : 'dispatch failed') +
-        (ack.event_id ? ' event_id=' + ack.event_id : ''),
-      ack.response && ack.response.task_id ? '   • task_id: ' + ack.response.task_id : '   • task_id: pending',
-      ack.response && ack.response.intent_id ? '   • intent_id: ' + ack.response.intent_id : '',
-      '3) Worker claim: ' + (ack.response && (ack.response.task_id || ack.response.intent_id) ? 'pending adapter claim' : 'idle'),
-    ] : ['2) AssistX API: no dispatch yet', '3) Worker claim: idle'];
+    // Step 1: Voice auth
+    if (lastAuthResult) {
+      lines.push('1) Sophia voice-agent: voiceprint auth ' + (lastAuthResult.accepted ? 'accepted' : 'rejected') +
+        ' at ' + ((lastAuthResult.score || 0) * 100).toFixed(0) + '%');
+      lines.push('   \u2022 match source: ' + (lastAuthResult.match_source || 'active_head') +
+        (lastAuthResult.fallback_used ? ' (fallback)' : ''));
+    } else {
+      lines.push('1) Sophia voice-agent: waiting for a verified voice clip');
+    }
 
-    const roster = [
-      '4) Available machines:',
-      ...knownWorkers.map(w => '   • ' + w.display_name + ' (' + w.node_id + ') — ' + w.role + ' — ' + w.note),
-    ];
+    // Step 2: Dispatch
+    if (ack) {
+      lines.push('2) AssistX API: ' + (ack.sent ? 'accepted dispatch' : 'dispatch failed') +
+        (ack.event_id ? ' event_id=' + ack.event_id : ''));
+      if (ack.correlation_id) lines.push('   \u2022 trace: /dispatch/trace/' + ack.correlation_id);
+      if (ack.task_id) lines.push('   \u2022 task_id: ' + ack.task_id);
+      if (ack.intent_id) lines.push('   \u2022 intent_id: ' + ack.intent_id);
+    } else {
+      lines.push('2) AssistX API: no dispatch yet');
+    }
 
-    const tail = ack && ack.error ? ['Dispatch error: ' + ack.error] : [];
-    executionTrace.innerHTML = [...voice, ...dispatch, ...roster, ...tail]
-      .filter(Boolean)
-      .map(line => '<div>' + line + '</div>')
-      .join('');
+    executionTrace.innerHTML = lines.filter(Boolean).map(line => '<div>' + line + '</div>').join('');
+
+    // If we have a correlation_id, fetch the real trace
+    if (ack && ack.correlation_id && ack.sent) {
+      try {
+        const traceRes = await fetch('/dispatch/trace/' + ack.correlation_id);
+        const trace = await traceRes.json();
+        if (trace.events && trace.events.length > 0) {
+          const traceLines = ['<div style="margin-top:6px;color:#94a3b8;">--- Trace Events ---</div>'];
+          traceLines.push('<div>3) Trace state: ' + (trace.current_state || 'unknown') + '</div>');
+          for (const evt of trace.events) {
+            const ts = evt.ts ? new Date(evt.ts).toLocaleTimeString() : '';
+            traceLines.push('<div>   \u2022 ' + evt.event_type + (ts ? ' at ' + ts : '') + '</div>');
+          }
+          executionTrace.innerHTML += traceLines.join('');
+        } else if (trace.error) {
+          executionTrace.innerHTML += '<div style="color:#f87171;">   Trace error: ' + trace.error + '</div>';
+        }
+      } catch (e) {
+        // Silently ignore trace fetch errors
+      }
+    }
   }
 
   async function verifyVoice(mode = 'manual') {
@@ -2393,6 +2412,7 @@ def create_app(config: AppConfig) -> FastAPI:
         webhook_url = _assistx_voice_webhook_url(req.target_url)
         token = ASSISTX_VOICE_WEBHOOK_SECRET or req.target_token.strip()
         event_id = uuid.uuid4().hex
+        correlation_id = uuid.uuid4().hex
         metadata = req.metadata if req.metadata and any(k for k in req.metadata if req.metadata[k]) else None
         ts = str(time.time())
         payload = OrderedDict()
@@ -2401,15 +2421,29 @@ def create_app(config: AppConfig) -> FastAPI:
         if req.text:
             payload["text"] = req.text
         payload["source"] = "sophia_voice"
+        payload["schema_version"] = "2026-06-08.v1"
+        payload["correlation_id"] = correlation_id
         if req.session_id:
             payload["session_id"] = req.session_id
         payload["client_ts"] = ts
         if metadata is not None:
             payload["metadata"] = metadata
+        payload["actor"] = {
+            "user_id": (metadata or {}).get("user_id", "scott"),
+            "device_id": (metadata or {}).get("device_id"),
+            "auth_state": (metadata or {}).get("auth_state", "accepted" if (metadata or {}).get("accepted") else "not_required"),
+        }
+        payload["links"] = {
+            "dispatch_id": None,
+            "intent_id": None,
+            "task_id": None,
+            "route_id": None,
+            "assignment_id": None,
+        }
         payload["auto_dispatch"] = req.auto_dispatch
         body_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         headers = {"Content-Type": "application/json"}
-        result = {"event_id": event_id, "sent": False, "error": None, "response": None}
+        result = {"event_id": event_id, "sent": False, "error": None, "response": None, "correlation_id": correlation_id}
         if not token:
             result["error"] = "Voice webhook secret not configured"
             dispatch_history.append({**result, "event_type": req.event_type, "ts_ms": now_ms()})
@@ -2422,7 +2456,12 @@ def create_app(config: AppConfig) -> FastAPI:
             r = httpx.post(webhook_url, content=body_bytes, headers=headers, timeout=10)
             result["sent"] = r.status_code == 200
             if r.status_code == 200:
-                result["response"] = r.json()
+                resp_data = r.json()
+                result["response"] = resp_data
+                result["correlation_id"] = resp_data.get("correlation_id", correlation_id)
+                result["task_id"] = resp_data.get("task_id")
+                result["dispatch_id"] = resp_data.get("dispatch_id")
+                result["intent_id"] = resp_data.get("intent_id")
             else:
                 result["error"] = f"HTTP {r.status_code}: {r.text[:300]}"
         except Exception as exc:
@@ -2431,6 +2470,19 @@ def create_app(config: AppConfig) -> FastAPI:
         if len(dispatch_history) > 100:
             dispatch_history[:] = dispatch_history[-100:]
         return result
+
+    @app.get("/dispatch/trace/{correlation_id}")
+    async def dispatch_trace(correlation_id: str) -> Dict[str, Any]:
+        import httpx
+        base = _assistx_voice_base_url()
+        trace_url = f"{base}/api/traces/{correlation_id}"
+        try:
+            r = httpx.get(trace_url, timeout=5)
+            if r.status_code == 200:
+                return r.json()
+            return {"correlation_id": correlation_id, "error": f"HTTP {r.status_code}", "events": [], "current_state": "unknown"}
+        except Exception as exc:
+            return {"correlation_id": correlation_id, "error": str(exc), "events": [], "current_state": "unknown"}
 
     @app.websocket("/events")
     async def events_ws(websocket: WebSocket) -> None:
