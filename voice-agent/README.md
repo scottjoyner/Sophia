@@ -26,7 +26,7 @@ curl http://127.0.0.1:8765/status
 The container config uses `hermes_overlay_v1`, writes artifacts under `/data`,
 and keeps the low-memory STT profile (`tiny`, `int8`, two CPU threads).
 It also defaults the memory graph to the local Neo4j container exposed on
-`bolt://host.docker.internal:7687`, using the `memory` database. Browser
+`bolt://host.docker.internal:7687`, using the `neo4j` database. Browser
 captures are written inside the container at `/captures`; the compose file
 binds that path to `/media/scott/NAS1/fileserver/audio/sophia-captures` on
 this machine.
@@ -44,7 +44,7 @@ at runtime:
 export NEO4J_URI=bolt://host.docker.internal:7687
 export NEO4J_USER=neo4j
 export NEO4J_PASSWORD=...
-export NEO4J_DATABASE=memory
+export NEO4J_DATABASE=neo4j
 export NEO4J_DEFAULT_SPEAKER=scott
 docker compose up --build
 ```

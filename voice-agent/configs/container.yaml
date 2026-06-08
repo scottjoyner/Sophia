@@ -36,5 +36,5 @@ neo4j:
   user: neo4j
   password_file: /run/secrets/neo4j_password
   password:
-  database: memory
+  database: neo4j
   default_speaker_name:

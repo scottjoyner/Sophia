@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import hmac
 import asyncio
+import hmac
 import json
+import os
 import uuid
 from collections import OrderedDict
 from pathlib import Path
@@ -27,6 +28,29 @@ from ..util.time import now_ms
 from .events import EventBus, event_to_dict
 from .protocols import build_protocol_adapter
 from .session_manager import SessionManager
+
+
+ASSISTX_VOICE_WEBHOOK_BASE_URL = os.getenv("ASSISTX_VOICE_WEBHOOK_BASE_URL", "http://host.docker.internal:8000").rstrip("/")
+ASSISTX_VOICE_WEBHOOK_BASE_URL_CONFIGURED = "ASSISTX_VOICE_WEBHOOK_BASE_URL" in os.environ
+ASSISTX_VOICE_WEBHOOK_SECRET = (
+    os.getenv("ASSISTX_VOICE_WEBHOOK_SECRET")
+    or os.getenv("VOICE_WEBHOOK_SECRET")
+    or ""
+).strip()
+ASSISTX_VOICE_WEBHOOK_SECRET_CONFIGURED = bool(os.getenv("ASSISTX_VOICE_WEBHOOK_SECRET") or os.getenv("VOICE_WEBHOOK_SECRET"))
+
+
+def _assistx_voice_base_url(raw: str | None = None) -> str:
+    candidate = (
+        ASSISTX_VOICE_WEBHOOK_BASE_URL if ASSISTX_VOICE_WEBHOOK_BASE_URL_CONFIGURED else raw or ASSISTX_VOICE_WEBHOOK_BASE_URL or ""
+    ).strip().rstrip("/")
+    if candidate.endswith("/api/voice/events"):
+        candidate = candidate[: -len("/api/voice/events")].rstrip("/")
+    return candidate or "http://host.docker.internal:8000"
+
+
+def _assistx_voice_webhook_url(raw: str | None = None) -> str:
+    return f"{_assistx_voice_base_url(raw)}/api/voice/events"
 
 
 class IntentRequest(BaseModel):
@@ -55,7 +79,7 @@ class DispatchRequest(BaseModel):
     text: str = ""
     metadata: Dict[str, Any] = {}
     auto_dispatch: bool = True
-    target_url: str = "http://host.docker.internal:8000"
+    target_url: str = ASSISTX_VOICE_WEBHOOK_BASE_URL
     target_token: str = ""
     session_id: str | None = "mobile"
 
@@ -359,6 +383,10 @@ CAPTURE_PAGE = """<!doctype html>
     </div>
   </section>
   <section>
+    <h2>&#x1F9EE; Execution Trace</h2>
+    <div id="executionTrace" style="font-size:12px;line-height:1.55;background:#071019;border:1px solid #1e293b;border-radius:8px;padding:10px;color:#cbd5e1;"></div>
+  </section>
+  <section>
     <h2>&#x1F514; Dispatch Event</h2>
     <div class="row">
       <div>
@@ -447,6 +475,7 @@ CAPTURE_PAGE = """<!doctype html>
   const dispatchMeta = document.getElementById('dispatchMeta');
   const dispatchSendBtn = document.getElementById('dispatchSendBtn');
   const dispatchLog = document.getElementById('dispatchLog');
+  const executionTrace = document.getElementById('executionTrace');
   const dispatchAuthBtn = document.getElementById('dispatchAuthBtn');
   const dispatchMeetingBtn = document.getElementById('dispatchMeetingBtn');
   const downloadTranscriptBtn = document.getElementById('downloadTranscriptBtn');
@@ -562,8 +591,10 @@ CAPTURE_PAGE = """<!doctype html>
         const text = p.text || p.transcript || '';
         const score = p.score !== undefined ? ' score=' + p.score.toFixed(3) : '';
         const accepted = p.accepted !== undefined ? (p.accepted ? '✓' : '✗') : '';
+        const match = p.match_source ? ' match=' + p.match_source : '';
+        const fallback = p.fallback_reason ? ' fallback=' + p.fallback_reason : '';
         const info = text ? ' <span style="color:#94a3b8;">' + text.slice(0, 60) + '</span>' : '';
-        return '<div style="color:#7dd3fc;">' + e.type + '</div><div style="color:#64748b;margin-left:12px;">' + score + accepted + info + '</div>';
+        return '<div style="color:#7dd3fc;">' + e.type + '</div><div style="color:#64748b;margin-left:12px;">' + score + accepted + match + fallback + info + '</div>';
       }).join('');
     } catch {}
   }
@@ -640,6 +671,43 @@ CAPTURE_PAGE = """<!doctype html>
     el.textContent = 'fallback: ' + fallback + ' | options: ' + items.join(' • ');
   }
 
+  const knownWorkers = [
+    { node_id: 'x1-370', display_name: 'x1-370', role: 'primary reasoning / local llm', note: 'best for complex reasoning, local voice prep, and agent orchestration' },
+    { node_id: 'xwing', display_name: 'xwing', role: 'fast iteration / local llm', note: 'best for quick turnarounds and lighter execution loops' },
+    { node_id: 'deathstar', display_name: 'deathstar-XPS-8920', role: 'vram-fit inference / ingest worker', note: 'best for local inference and ingestion-heavy jobs' },
+    { node_id: 'macbook-air', display_name: 'Scott’s MacBook Air', role: 'prefill / Sophia response prep', note: 'best for quick iteration and response drafting' },
+  ];
+
+  function renderExecutionTrace(ack) {
+    if (!executionTrace) return;
+    const voice = lastAuthResult ? [
+      '1) Sophia voice-agent: voiceprint auth ' + (lastAuthResult.accepted ? 'accepted' : 'rejected') +
+        ' at ' + ((lastAuthResult.score || 0) * 100).toFixed(0) + '%',
+      '   • match source: ' + (lastAuthResult.match_source || 'active_head') +
+      (lastAuthResult.fallback_used ? ' (fallback)' : ''),
+      lastAuthResult.device_id ? '   • matched device: ' + lastAuthResult.device_id : '   • matched device: default identity',
+    ] : ['1) Sophia voice-agent: waiting for a verified voice clip'];
+
+    const dispatch = ack ? [
+      '2) AssistX API: ' + (ack.sent ? 'accepted dispatch' : 'dispatch failed') +
+        (ack.event_id ? ' event_id=' + ack.event_id : ''),
+      ack.response && ack.response.task_id ? '   • task_id: ' + ack.response.task_id : '   • task_id: pending',
+      ack.response && ack.response.intent_id ? '   • intent_id: ' + ack.response.intent_id : '',
+      '3) Worker claim: ' + (ack.response && (ack.response.task_id || ack.response.intent_id) ? 'pending adapter claim' : 'idle'),
+    ] : ['2) AssistX API: no dispatch yet', '3) Worker claim: idle'];
+
+    const roster = [
+      '4) Available machines:',
+      ...knownWorkers.map(w => '   • ' + w.display_name + ' (' + w.node_id + ') — ' + w.role + ' — ' + w.note),
+    ];
+
+    const tail = ack && ack.error ? ['Dispatch error: ' + ack.error] : [];
+    executionTrace.innerHTML = [...voice, ...dispatch, ...roster, ...tail]
+      .filter(Boolean)
+      .map(line => '<div>' + line + '</div>')
+      .join('');
+  }
+
   async function verifyVoice(mode = 'manual') {
     const audioSrc = selectedFile || blob;
     if (!audioSrc) { return; }
@@ -673,6 +741,7 @@ CAPTURE_PAGE = """<!doctype html>
       const matchedDevice = data.device_id && data.device_id !== 'default' ? ' [' + data.device_id + ']' : '';
       showAuthResult(data.score, data.accepted, matchedDevice);
       renderAuthCandidates(data);
+      renderExecutionTrace(null);
       
       const fallbackMsg = data.fallback_used ? ' — fallback ' + (data.fallback_reason || 'historical candidate search') : '';
       const msg = data.accepted
@@ -1240,7 +1309,8 @@ CAPTURE_PAGE = """<!doctype html>
       const res = await fetch('/dispatch/status');
       const data = await res.json();
       if (data.assistx_reachable) {
-        assistxPill.textContent = 'assistx: connected (' + data.dispatched_count + ' sent)';
+        const probe = data.assistx_webhook_ok ? '' : ' (webhook ' + (data.assistx_webhook_status ?? 'n/a') + ')';
+        assistxPill.textContent = 'assistx: connected' + probe + ' (' + data.dispatched_count + ' sent)';
         assistxPill.style.borderColor = '#34d399';
         assistxPill.style.color = '#6ee7b7';
       } else {
@@ -1248,6 +1318,7 @@ CAPTURE_PAGE = """<!doctype html>
         assistxPill.style.borderColor = '#fb7185';
         assistxPill.style.color = '#fda4af';
       }
+      renderExecutionTrace(data.last_dispatch || null);
     } catch {
       assistxPill.textContent = 'assistx: error';
       assistxPill.style.borderColor = '#fb7185';
@@ -1288,6 +1359,7 @@ CAPTURE_PAGE = """<!doctype html>
       dispatchLog.prepend(entry);
       while (dispatchLog.children.length > 50) dispatchLog.removeChild(dispatchLog.lastChild);
       refreshDispatchStatus();
+      renderExecutionTrace(data);
     } catch (err) {
       const entry = document.createElement('div');
       entry.className = 'dispatch-entry failed';
@@ -1366,6 +1438,7 @@ CAPTURE_PAGE = """<!doctype html>
       dispatchLog.prepend(entry);
       while (dispatchLog.children.length > 50) dispatchLog.removeChild(dispatchLog.lastChild);
       refreshDispatchStatus();
+      renderExecutionTrace(data);
       return data;
     } catch (err) {
       return { sent: false, error: err.message };
@@ -2286,15 +2359,28 @@ def create_app(config: AppConfig) -> FastAPI:
     @app.get("/dispatch/status")
     async def dispatch_status() -> Dict[str, Any]:
         import httpx
-        base = "http://host.docker.internal:8000"
-        assistx_ok = False
+
+        base = _assistx_voice_base_url()
+        webhook_url = _assistx_voice_webhook_url(base)
+        assistx_reachable = False
+        webhook_status = None
+        webhook_error = None
         try:
-            r = httpx.get(f"{base}/health", timeout=3)
-            assistx_ok = r.status_code == 200
-        except Exception:
-            pass
+            r = httpx.post(
+                webhook_url,
+                content=b"{}",
+                headers={"Content-Type": "application/json"},
+                timeout=3,
+            )
+            webhook_status = r.status_code
+            assistx_reachable = r.status_code != 404
+        except Exception as exc:
+            webhook_error = f"{type(exc).__name__}: {exc}"
         return {
-            "assistx_reachable": assistx_ok,
+            "assistx_reachable": assistx_reachable,
+            "assistx_webhook_ok": webhook_status == 200 if webhook_status is not None else False,
+            "assistx_webhook_status": webhook_status,
+            "assistx_webhook_error": webhook_error,
             "assistx_url": base,
             "dispatched_count": len(dispatch_history),
             "last_dispatch": dispatch_history[-1] if dispatch_history else None,
@@ -2303,7 +2389,9 @@ def create_app(config: AppConfig) -> FastAPI:
     @app.post("/dispatch/to-assistx")
     async def dispatch_to_assistx(req: DispatchRequest) -> Dict[str, Any]:
         import httpx, time, hmac, hashlib
-        base = req.target_url
+
+        webhook_url = _assistx_voice_webhook_url(req.target_url)
+        token = ASSISTX_VOICE_WEBHOOK_SECRET or req.target_token.strip()
         event_id = uuid.uuid4().hex
         metadata = req.metadata if req.metadata and any(k for k in req.metadata if req.metadata[k]) else None
         ts = str(time.time())
@@ -2321,11 +2409,17 @@ def create_app(config: AppConfig) -> FastAPI:
         payload["auto_dispatch"] = req.auto_dispatch
         body_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         headers = {"Content-Type": "application/json"}
-        sig = hmac.new(req.target_token.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
-        headers["X-Voice-Signature"] = f"sha256={sig}"
         result = {"event_id": event_id, "sent": False, "error": None, "response": None}
+        if not token:
+            result["error"] = "Voice webhook secret not configured"
+            dispatch_history.append({**result, "event_type": req.event_type, "ts_ms": now_ms()})
+            if len(dispatch_history) > 100:
+                dispatch_history[:] = dispatch_history[-100:]
+            return result
+        sig = hmac.new(token.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
+        headers["X-Voice-Signature"] = f"sha256={sig}"
         try:
-            r = httpx.post(f"{base}/api/voice/events", content=body_bytes, headers=headers, timeout=10)
+            r = httpx.post(webhook_url, content=body_bytes, headers=headers, timeout=10)
             result["sent"] = r.status_code == 200
             if r.status_code == 200:
                 result["response"] = r.json()
