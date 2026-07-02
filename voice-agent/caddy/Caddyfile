@@ -1,10 +1,143 @@
-https://x1-370.tailcb8954.ts.net:8443 {
-    tls /certs/sophia.crt /certs/sophia.key
-    encode gzip
+# Caddy reverse proxy for all local services (HTTPS via Tailscale CA-signed cert)
+# Access at: https://x1-370.tailcb8954.ts.net:8443/<path>/
+# or locally at: https://localhost:8443/<path>/
+# 
+# To trust this CA on your devices, install /certs/ca.crt (distributed from ~/.sophia-caddy/ca/)
 
-    request_body {
-        max_size 512MB
+x1-370.tailcb8954.ts.net:8443, localhost:8443 {
+    tls /certs/server.crt /certs/server.key {
+        protocols tls1.2 tls1.3
+    }
+    encode gzip zstd
+    
+    log {
+        output stdout
+        level DEBUG
+    }
+    
+    # Auto-assign (port 8090) — on auto-assist_default network  
+    @auto_assign path /api/assign* /assign*
+    handle @auto_assign {
+        rewrite * /health
+        reverse_proxy auto-assign:8090
     }
 
-    reverse_proxy host.docker.internal:8765
+    # API services - auto-router + health check (port 8088)
+    @router_api path /api/router/*, /health/*
+    handle @router_api {
+        reverse_proxy auto-router:8088
+    }
+
+    # Insurance platform microservices — all on auto-insurance_default network
+    @insurance_quote path /api/quote*
+    handle @insurance_quote {
+        reverse_proxy quote-service:3001
+    }
+    
+    @insurance_risk_appetite path /api/risk-appetite*
+    handle @insurance_risk_appetite {
+        reverse_proxy risk-appetite-service:3002
+    }
+
+    @insurance_auth path /api/auth*
+    handle @insurance_auth {
+        reverse_proxy auth-service:3003
+    }
+
+    @insurance_policy path /api/policy*
+    handle @insurance_policy {
+        reverse_proxy policy-service:3004
+    }
+
+    @insurance_claims path /api/claims*
+    handle @insurance_claims {
+        reverse_proxy claims-service:3005
+    }
+
+    @insurance_documents path /api/documents*
+    handle @insurance_documents {
+        reverse_proxy document-service:3006
+    }
+
+    @insurance_blockchain path /api/blockchain-gateway*
+    handle @insurance_blockchain {
+        reverse_proxy blockchain-gateway:3007
+    }
+
+    @insurance_treasury path /api/treasury*
+    handle @insurance_treasury {
+        reverse_proxy treasury-service:3008
+    }
+
+    @insurance_compliance path /api/compliance*
+    handle @insurance_compliance {
+        reverse_proxy compliance-service:3009
+    }
+
+    @insurance_analytics path /api/analytics*
+    handle @insurance_analytics {
+        reverse_proxy analytics-service:3010
+    }
+
+    @insurance_messages path /api/messages*
+    handle @insurance_messages {
+        reverse_proxy message-service:3011
+    }
+
+    @insurance_customers path /api/customers*
+    handle @insurance_customers {
+        reverse_proxy customer-service:3013
+    }
+
+    @insurance_event_broker path /api/event-broker*
+    handle @insurance_event_broker {
+        reverse_proxy event-broker-adapter:3014
+    }
+
+    @insurance_products path /api/products*
+    handle @insurance_products {
+        reverse_proxy product-service:3015
+    }
+
+    @insurance_billing path /api/billing*
+    handle @insurance_billing {
+        reverse_proxy billing-service:3016
+    }
+    
+    # Auto-assist API (port 8000) — on auto-assist_default network  
+    @assistx path /assistx/*
+    handle @assistx {
+        reverse_proxy assistx-api:8000
+    }
+
+    # Nextcloud — access via /nextcloud/* prefix since subdomain routing complex in Caddy v2
+    @nextcloud path /nextcloud*
+    handle @nextcloud {
+        reverse_proxy nextcloud:80
+    }
+    
+    # Neo4j browser (port 7474) — accessible via Docker DNS from docker-compose_external  
+    @neo4j path /neo4j*
+    handle @neo4j {
+        reverse_proxy neo4j:7474
+    }
+
+    @homeassistant path /homeassistant*
+    handle @homeassistant {
+        reverse_proxy home-assistant:8123
+    }
+
+    # Auto-ingest job API (port 8766) — on auto-ingest_auto-ingest-net
+    @ingest_api path /ingest*
+    handle @ingest_api {
+        reverse_proxy auto-ingest-job-api:8766
+    }
+    
+    @jaeger path /jaeger/*
+    handle @jaeger {
+        reverse_proxy jaeger:16686
+    }
+
+    # Default catch-all — insurance web frontend (port 80) 
+    reverse_proxy web:80
 }

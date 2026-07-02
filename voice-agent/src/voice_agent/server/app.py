@@ -2450,8 +2450,15 @@ def create_app(config: AppConfig) -> FastAPI:
             if len(dispatch_history) > 100:
                 dispatch_history[:] = dispatch_history[-100:]
             return result
-        sig = hmac.new(token.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
-        headers["X-Voice-Signature"] = f"sha256={sig}"
+        auth_user = os.getenv("ASSISTX_BASIC_AUTH_USER", "")
+        auth_pass = os.getenv("ASSISTX_BASIC_AUTH_PASS", "")
+        if auth_user and auth_pass:
+            import base64
+            creds = base64.b64encode(f"{auth_user}:{auth_pass}".encode()).decode()
+            headers["Authorization"] = f"Basic {creds}"
+        else:
+            sig = hmac.new(token.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
+            headers["X-Voice-Signature"] = f"sha256={sig}"
         try:
             r = httpx.post(webhook_url, content=body_bytes, headers=headers, timeout=10)
             result["sent"] = r.status_code == 200
@@ -2476,8 +2483,11 @@ def create_app(config: AppConfig) -> FastAPI:
         import httpx
         base = _assistx_voice_base_url()
         trace_url = f"{base}/api/traces/{correlation_id}"
+        auth_user = os.getenv("ASSISTX_BASIC_AUTH_USER", "")
+        auth_pass = os.getenv("ASSISTX_BASIC_AUTH_PASS", "")
+        auth = (auth_user, auth_pass) if auth_user and auth_pass else None
         try:
-            r = httpx.get(trace_url, timeout=5)
+            r = httpx.get(trace_url, timeout=5, auth=auth)
             if r.status_code == 200:
                 return r.json()
             return {"correlation_id": correlation_id, "error": f"HTTP {r.status_code}", "events": [], "current_state": "unknown"}

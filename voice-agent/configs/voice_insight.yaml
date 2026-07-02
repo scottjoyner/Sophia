@@ -1,7 +1,7 @@
 neo4j:
   uri: bolt://host.docker.internal:7687
   user: neo4j
-  source_database: neo4j
+  source_database: assistx
   target_database: memory
 
 voice_insight:
