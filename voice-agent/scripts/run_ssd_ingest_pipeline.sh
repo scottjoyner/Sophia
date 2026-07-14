@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SOURCE="${SOURCE:-/media/scott/NAS1/fileserver/audio}"
+SOURCE="${SOURCE:-/media/scott/NAS5/fileserver/audio}"
 DEST="${DEST:-/mnt/S/sophia-ingest/audio}"
 MANIFEST="${MANIFEST:-/mnt/S/sophia-ingest/manifests/staged-audio.jsonl}"
 NEO4J_URI="${NEO4J_URI:-bolt://localhost:7687}"

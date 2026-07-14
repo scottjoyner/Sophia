@@ -1,3 +1,4 @@
+
 neo4j:
   uri: bolt://host.docker.internal:7687
   user: neo4j
@@ -18,9 +19,16 @@ voice_insight:
     training_root: /ssd-ingest/voice-insight/training
     host_training_root: /mnt/S/sophia-ingest/voice-insight/training
     path_rewrites:
+      
       - from: /mnt/8TB_2025/fileserver
         to: /nas-fileserver
-      - from: /media/scott/NAS1/fileserver
+      - from: /media/scott/NAS5/fileserver
+        to: /nas-fileserver
+      - from: /media/scott/NAS5/fileserver
+        to: /nas-fileserver
+      - from: /media/scott/NAS5/fileserver
+        to: /nas-fileserver
+      - from: /media/scott/NAS5/fileserver
         to: /nas-fileserver
       - from: /mnt/S/sophia-ingest
         to: /ssd-ingest

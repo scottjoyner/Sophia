@@ -554,9 +554,9 @@ Because paths differ between hosts and containers, store multiple path forms whe
 
 ```yaml
 artifact_id: string
-storage_root: nas1 | s-drive | local-ssd | external-drive
+storage_root: nas5 | s-drive | local-ssd | external-drive
 relative_path: path/under/root/file.ext
-host_path: /media/scott/NAS1/...
+host_path: /media/scott/NAS5/...
 container_path: /nas/...
 tailscale_host_hint: x1-370
 sha256: optional

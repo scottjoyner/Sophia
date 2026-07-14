@@ -25,9 +25,9 @@ x-sophia-env: &sophia-env
 
 x-sophia-volumes: &sophia-volumes
   - sophia_voice_data:/data
-  - /media/scott/NAS1/fileserver/audio/sophia-captures:/captures
+  - /media/scott/NAS5/fileserver/audio/sophia-captures:/captures
   - /mnt/S/sophia-ingest:/ssd-ingest
-  - /media/scott/NAS1/fileserver:/nas-fileserver:ro
+  - /media/scott/NAS5/fileserver:/nas-fileserver:ro
   - /home/scott/.config/sophia/neo4j_password:/run/secrets/neo4j_password:ro
 
 services:
@@ -36,6 +36,7 @@ services:
       context: .
       args:
         INSTALL_VOICE_INSIGHT_DEPS: 1
+    restart: unless-stopped
     ports:
       - "8765:8765"
     environment: *sophia-env

@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 
-IntentName = Literal["dictation", "command", "question", "chat"]
+VoiceIntentType = Literal["dictation", "command", "question", "chat"]
 
 
 @dataclass
 class VoiceIntent:
-    name: IntentName
+    name: VoiceIntentType
     confidence: float
     transcript: str
-    hermes_prompt: str
+    hermes_prompt: Optional[str] = None
+    voice_intent: str = ""
     source: str = "heuristic"
 
 
@@ -28,9 +29,9 @@ _QUESTION_RE = re.compile(r"\?\s*$|\b(what|why|how|when|where|who|can you|could 
 def detect_voice_intent(transcript: str) -> VoiceIntent:
     text = " ".join(transcript.strip().split())
     if not text:
-        return VoiceIntent("chat", 0.0, text, "The user sent empty voice input.")
+        return VoiceIntent("chat", 0.0, text)
     if _DICTATION_RE.search(text):
-        name: IntentName = "dictation"
+        name: VoiceIntentType = "dictation"
         confidence = 0.78
     elif _COMMAND_RE.search(text):
         name = "command"
@@ -47,21 +48,21 @@ def detect_voice_intent(transcript: str) -> VoiceIntent:
 def intent_from_model_payload(transcript: str, payload: dict) -> VoiceIntent:
     fallback = detect_voice_intent(transcript)
     raw_name = str(payload.get("intent") or fallback.name).lower()
-    name: IntentName = raw_name if raw_name in {"dictation", "command", "question", "chat"} else fallback.name
+    name: VoiceIntentType = raw_name if raw_name in {"dictation", "command", "question", "chat"} else fallback.name
     try:
         confidence = float(payload.get("confidence", fallback.confidence))
     except (TypeError, ValueError):
         confidence = fallback.confidence
     confidence = max(0.0, min(1.0, confidence))
     normalized = " ".join(str(payload.get("transcript") or transcript).strip().split())
-    prompt = str(payload.get("hermes_prompt") or build_hermes_prompt(normalized, name, confidence))
+    raw = payload.get("hermes_prompt")
+    prompt = str(raw) if raw else build_hermes_prompt(normalized, name, confidence)
     return VoiceIntent(name, confidence, normalized, prompt, source="draft_model")
 
 
-def build_hermes_prompt(transcript: str, intent: IntentName, confidence: float) -> str:
+def build_hermes_prompt(transcript: str, intent: VoiceIntentType, confidence: float) -> str:
     return (
-        "Voice input was captured by Sophia for Hermes.\n"
-        f"Detected intent: {intent} (confidence {confidence:.2f}).\n"
+        f"Voice input detected. Intent: {intent} (confidence {confidence:.2f}).\n"
         "Treat speech recognition errors as possible and ask a concise clarification if the action is ambiguous.\n"
         "If this is dictation, preserve the user's wording and clean only obvious transcription artifacts.\n"
         "If this is a command, execute only after the requested target and action are clear.\n\n"

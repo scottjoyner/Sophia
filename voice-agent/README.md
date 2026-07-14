@@ -27,8 +27,8 @@ The container config uses `hermes_overlay_v1`, writes artifacts under `/data`,
 and keeps the low-memory STT profile (`tiny`, `int8`, two CPU threads).
 It also defaults the memory graph to the local Neo4j container exposed on
 `bolt://host.docker.internal:7687`, using the `neo4j` database. Browser
-captures are written inside the container at `/captures`; the compose file
-binds that path to `/media/scott/NAS1/fileserver/audio/sophia-captures` on
+Browser captures are written inside the container at `/captures`; the compose file
+binds that path to `/media/scott/NAS5/fileserver/audio/sophia-captures` on
 this machine.
 
 The capture page also sends context with each saved clip: a stable browser
@@ -86,7 +86,7 @@ speaker work, and graph ingest can run without repeatedly pulling from NAS.
 
 Current local paths:
 
-- NAS audio source: `/media/scott/NAS1/fileserver/audio`
+- NAS audio source: `/media/scott/NAS5/fileserver/audio`
 - NAS archive root in the container: `/nas-fileserver`
 - S drive SSD staging root: `/mnt/S/sophia-ingest`
 - SSD staging root in the container: `/ssd-ingest`
@@ -97,7 +97,7 @@ Stage NAS audio to SSD:
 
 ```bash
 scripts/stage_nas_audio_to_ssd.py \
-  --source /media/scott/NAS1/fileserver/audio \
+  --source /media/scott/NAS5/fileserver/audio \
   --dest /mnt/S/sophia-ingest/audio \
   --manifest /mnt/S/sophia-ingest/manifests/staged-audio.jsonl
 ```

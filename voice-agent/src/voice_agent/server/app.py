@@ -226,7 +226,7 @@ CAPTURE_PAGE = """<!doctype html>
     </div>
     <div id="fallback" class="fallback">
       <label for="audioFile">Upload audio file</label>
-      <input id="audioFile" type="file" accept="audio/*,video/*" capture>
+      <input id="audioFile" type="file" accept="audio/*">
     </div>
     <div class="meter"><div id="level"></div></div>
     <div id="status" class="status">Tap Record, then speak naturally.</div>
@@ -1755,10 +1755,10 @@ def create_app(config: AppConfig) -> FastAPI:
         if not intent_provider:
             return detect_voice_intent(transcript)
         prompt = (
-            "Classify this voice transcript for a Hermes voice sidecar. "
-            "Return only compact JSON with keys: intent, confidence, transcript, hermes_prompt. "
+            "Classify this voice transcript. "
+            "Return only compact JSON with keys: intent, confidence, transcript. "
             "intent must be one of dictation, command, question, chat. "
-            "Keep hermes_prompt concise and pass through the user's meaning without adding facts.\n\n"
+            "Respond with valid JSON only.\n\n"
             f"Transcript: {transcript}"
         )
         try:
@@ -2020,12 +2020,15 @@ def create_app(config: AppConfig) -> FastAPI:
             "confidence": detected.confidence,
             "source": detected.source,
             "transcript": detected.transcript,
-            "hermes_prompt": detected.hermes_prompt,
         }
 
     @app.post("/voice-chat")
     async def voice_chat(req: VoiceChatRequest) -> Dict[str, Any]:
         detected = _detect_intent(req.transcript)
+        voice_input = (
+            f"Voice input detected. Intent: {detected.name} (confidence {detected.confidence:.2f}).\n"
+            f"Transcript: {detected.transcript}"
+        )
         intent_payload = {
             "session_id": req.session_id,
             "user_id": req.user_id,
@@ -2033,10 +2036,10 @@ def create_app(config: AppConfig) -> FastAPI:
             "confidence": detected.confidence,
             "source": detected.source,
             "transcript": detected.transcript,
-            "hermes_prompt": detected.hermes_prompt,
+            "voice_intent": voice_input,
         }
         bus.publish("intent_detected", intent_payload)
-        answer = manager.pipeline.ralph.run(detected.hermes_prompt)
+        answer = manager.pipeline.ralph.run(voice_input)
         output_payload = {"session_id": req.session_id, "user_id": req.user_id, "text": answer}
         bus.publish("llm_output", output_payload)
         return {
@@ -2044,7 +2047,6 @@ def create_app(config: AppConfig) -> FastAPI:
             "confidence": detected.confidence,
             "source": detected.source,
             "transcript": detected.transcript,
-            "hermes_prompt": detected.hermes_prompt,
             "response": answer,
         }
 
@@ -2413,6 +2415,7 @@ def create_app(config: AppConfig) -> FastAPI:
         token = ASSISTX_VOICE_WEBHOOK_SECRET or req.target_token.strip()
         event_id = uuid.uuid4().hex
         correlation_id = uuid.uuid4().hex
+        dispatch_id = uuid.uuid4().hex
         metadata = req.metadata if req.metadata and any(k for k in req.metadata if req.metadata[k]) else None
         ts = str(time.time())
         payload = OrderedDict()
@@ -2434,8 +2437,8 @@ def create_app(config: AppConfig) -> FastAPI:
             "auth_state": (metadata or {}).get("auth_state", "accepted" if (metadata or {}).get("accepted") else "not_required"),
         }
         payload["links"] = {
-            "dispatch_id": None,
-            "intent_id": None,
+            "correlation_id": correlation_id,
+            "dispatch_id": dispatch_id,
             "task_id": None,
             "route_id": None,
             "assignment_id": None,

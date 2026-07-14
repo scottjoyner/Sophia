@@ -1,11 +1,10 @@
-# Caddy reverse proxy for all local services (HTTPS via Tailscale CA-signed cert)
+# Caddy reverse proxy for local services over the tailnet using a Tailscale-issued cert.
 # Access at: https://x1-370.tailcb8954.ts.net:8443/<path>/
-# or locally at: https://localhost:8443/<path>/
-# 
-# To trust this CA on your devices, install /certs/ca.crt (distributed from ~/.sophia-caddy/ca/)
+#
+# Certs are expected at /certs/x1-370.tailcb8954.ts.net.crt and /certs/x1-370.tailcb8954.ts.net.key.
 
-x1-370.tailcb8954.ts.net:8443, localhost:8443 {
-    tls /certs/server.crt /certs/server.key {
+x1-370.tailcb8954.ts.net:8443 {
+    tls /certs/x1-370.tailcb8954.ts.net.crt /certs/x1-370.tailcb8954.ts.net.key {
         protocols tls1.2 tls1.3
     }
     encode gzip zstd

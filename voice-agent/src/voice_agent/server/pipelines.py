@@ -101,18 +101,22 @@ class PipelineManager:
         if not auth.get("accepted"):
             return
         intent = detect_voice_intent(refined_text or final_text)
+        voice_input = (
+            f"Voice input detected. Intent: {intent.name} (confidence {intent.confidence:.2f}).\n"
+            f"Transcript: {intent.transcript}"
+        )
         intent_payload = {
             "session_id": state.session_id,
             "ts_ms": now_ms(),
             "intent": intent.name,
             "confidence": intent.confidence,
             "transcript": intent.transcript,
-            "hermes_prompt": intent.hermes_prompt,
+            "voice_intent": voice_input,
         }
         self.logger.log("intent_detected", intent_payload)
         self.db.log_event(state.session_id, "intent_detected", intent_payload)
         self._emit("intent_detected", intent_payload)
-        answer = self.ralph.run(intent.hermes_prompt)
+        answer = self.ralph.run(voice_input)
         llm_payload = {"session_id": state.session_id, "ts_ms": now_ms(), "text": answer}
         self.logger.log("llm_output", llm_payload)
         self.db.log_event(state.session_id, "llm_output", llm_payload)

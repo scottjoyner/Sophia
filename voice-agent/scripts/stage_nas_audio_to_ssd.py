@@ -53,7 +53,7 @@ def _same_file(src: Path, dst: Path, *, checksum: bool) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Stage NAS audio onto local SSD for Sophia/Hermes ingest.")
-    parser.add_argument("--source", default="/media/scott/NAS1/fileserver/audio")
+    parser.add_argument("--source", default="/media/scott/NAS5/fileserver/audio")
     parser.add_argument("--dest", default="/mnt/S/sophia-ingest/audio")
     parser.add_argument("--manifest", default="/mnt/S/sophia-ingest/manifests/staged-audio.jsonl")
     parser.add_argument("--container-prefix", default="/ssd-ingest")
