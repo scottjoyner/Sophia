@@ -18,6 +18,8 @@ class AuthConfig(BaseModel):
     owner_override_token_file: Optional[str] = None
     owner_append_min_seconds: float = 2.0
     owner_append_max_seconds: float = 30.0
+    global_speaker_link_enabled: bool = True
+    global_speaker_link_threshold: float = 0.85
 
 
 class STTConfig(BaseModel):
@@ -170,6 +172,15 @@ def _apply_env(config: AppConfig) -> AppConfig:
         auth_update["owner_append_min_seconds"] = float(os.environ["SOPHIA_OWNER_APPEND_MIN_SECONDS"])
     if os.getenv("SOPHIA_OWNER_APPEND_MAX_SECONDS"):
         auth_update["owner_append_max_seconds"] = float(os.environ["SOPHIA_OWNER_APPEND_MAX_SECONDS"])
+    if os.getenv("SOPHIA_GLOBAL_SPEAKER_LINK_ENABLED"):
+        auth_update["global_speaker_link_enabled"] = os.environ["SOPHIA_GLOBAL_SPEAKER_LINK_ENABLED"].lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    if os.getenv("SOPHIA_GLOBAL_SPEAKER_LINK_THRESHOLD"):
+        auth_update["global_speaker_link_threshold"] = float(os.environ["SOPHIA_GLOBAL_SPEAKER_LINK_THRESHOLD"])
     if auth_update:
         config.auth = config.auth.model_copy(update=auth_update)
     if config.auth.owner_override_token is None and config.auth.owner_override_token_file:

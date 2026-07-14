@@ -72,6 +72,14 @@ CONSOLE_PAGE = """<!doctype html>
     .composer .mic { background: var(--panel-2); border: 1px solid var(--border-2); color: var(--text); flex: 0 0 auto; min-width: 52px; }
     .composer .mic.rec { background: var(--red); color: #2a0610; border-color: var(--red); }
     .hint { color: var(--muted-2); font-size: 12px; padding: 0 16px 8px; }
+    .identity-strip { display: flex; gap: 8px; align-items: center; padding: 0 16px 14px; flex-wrap: wrap; }
+    .identity-strip .id-btn { background: var(--panel-2); border: 1px solid var(--border-2); color: var(--text); flex: 0 0 auto; min-height: 42px; padding: 0 14px; }
+    .identity-strip .id-btn:hover:not(:disabled) { background: #29394f; }
+    .identity-strip .id-btn.warn { border-color: var(--amber); color: #fcd34d; }
+    .identity-strip .voice-status { font-size: 12px; color: var(--muted); flex-basis: 100%; }
+    .voice-status.ok { color: #6ee7b7; }
+    .voice-status.bad { color: #fda4af; }
+    .voice-status.link { color: #7dd3fc; }
 
     /* Inbox */
     #inbox { border-left: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
@@ -138,6 +146,12 @@ CONSOLE_PAGE = """<!doctype html>
           <button class="mic" id="micBtn" title="Hold to record a voice check" type="button">🎙</button>
           <textarea id="composer" rows="1" placeholder="Message Sophia…"></textarea>
           <button class="send" id="sendBtn" type="button">Send</button>
+        </div>
+        <div class="identity-strip">
+          <input id="adminKey" type="password" placeholder="owner override key" autocomplete="off" style="flex:1;min-width:120px;">
+          <button class="id-btn" id="verifyBtn" type="button">Verify voice</button>
+          <button class="id-btn warn" id="overrideBtn" type="button" title="Rejected? Override to add this clip and retrain the speaker embedding">Override &amp; retrain</button>
+          <span id="voiceStatus" class="voice-status">Hold 🎙 to record, then Verify.</span>
         </div>
       </section>
 
@@ -376,12 +390,27 @@ CONSOLE_PAGE = """<!doctype html>
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
 
-  // ---- Optional voice identity check ----
+  // ---- Voice identity: verify + override-as-training ----
+  const adminKey = $('adminKey');
+  const verifyBtn = $('verifyBtn');
+  const overrideBtn = $('overrideBtn');
+  const voiceStatus = $('voiceStatus');
+  let lastVoiceBlob = null;
+
+  // Restore a previously entered owner key so override stays one-tap.
+  try {
+    const savedKey = localStorage.getItem('sophia_admin_key');
+    if (savedKey) adminKey.value = savedKey;
+  } catch {}
+  adminKey.addEventListener('input', () => { try { localStorage.setItem('sophia_admin_key', adminKey.value); } catch {} });
+
   micBtn.addEventListener('mousedown', startVoiceCheck);
   micBtn.addEventListener('mouseup', stopVoiceCheck);
   micBtn.addEventListener('mouseleave', stopVoiceCheck);
   micBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startVoiceCheck(); });
   micBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopVoiceCheck(); });
+  verifyBtn.addEventListener('click', () => verifyVoiceCheck(false));
+  overrideBtn.addEventListener('click', overrideAndTrain);
 
   async function startVoiceCheck() {
     if (!navigator.mediaDevices || !window.MediaRecorder) { toast('Voice check needs a secure context + mic.'); return; }
@@ -393,6 +422,8 @@ CONSOLE_PAGE = """<!doctype html>
       recorder.start();
       micBtn.classList.add('rec');
       micBtn.textContent = '●';
+      voiceStatus.className = 'voice-status';
+      voiceStatus.textContent = 'Recording… release to verify.';
     } catch { toast('Microphone blocked.'); }
   }
 
@@ -405,18 +436,66 @@ CONSOLE_PAGE = """<!doctype html>
     await stopped;
     if (micStream) micStream.getTracks().forEach(t => t.stop());
     const blob = new Blob(micChunks, { type: recorder.mimeType || 'audio/webm' });
+    lastVoiceBlob = blob;
     if (!blob.size) return;
+    await verifyVoiceCheck(false);
+  }
+
+  async function verifyVoiceCheck(showToast) {
+    if (!lastVoiceBlob || !lastVoiceBlob.size) { voiceStatus.className = 'voice-status bad'; voiceStatus.textContent = 'Record a voice clip first (hold 🎙).'; return; }
     const form = new FormData();
-    form.append('audio', blob, 'voice-check.webm');
+    form.append('audio', lastVoiceBlob, 'voice-check.webm');
     form.append('user_id', sessionMeta.user_id || 'scott');
     form.append('session_id', 'console');
-    toast('Verifying voice identity…');
+    voiceStatus.className = 'voice-status';
+    voiceStatus.textContent = 'Verifying voice identity…';
     try {
       const r = await fetch('/auth/verify', { method: 'POST', body: form, credentials: 'same-origin' });
       const d = await r.json();
       const pct = ((d.score || 0) * 100).toFixed(0);
-      toast((d.accepted ? 'Voice accepted ' : 'Voice rejected ') + pct + '%', 3200);
-    } catch { toast('Voice check failed.'); }
+      if (d.accepted) {
+        voiceStatus.className = 'voice-status ok';
+        voiceStatus.textContent = 'Voice accepted ' + pct + '%' + (d.match_source === 'historical_fallback' ? ' (fallback)' : '');
+      } else {
+        voiceStatus.className = 'voice-status bad';
+        voiceStatus.textContent = 'Voice rejected ' + pct + '% — use “Override & retrain” to add this clip and improve the model.';
+      }
+      if (showToast) toast((d.accepted ? 'Voice accepted ' : 'Voice rejected ') + pct + '%', 3200);
+    } catch { voiceStatus.className = 'voice-status bad'; voiceStatus.textContent = 'Voice check failed.'; }
+  }
+
+  async function overrideAndTrain() {
+    if (!lastVoiceBlob || !lastVoiceBlob.size) { voiceStatus.className = 'voice-status bad'; voiceStatus.textContent = 'Record a voice clip first (hold 🎙).'; return; }
+    const key = adminKey.value || '';
+    if (!key.trim()) { voiceStatus.className = 'voice-status bad'; voiceStatus.textContent = 'Owner override key required to retrain.'; return; }
+    const form = new FormData();
+    form.append('audio', lastVoiceBlob, 'owner-override.webm');
+    form.append('user_id', sessionMeta.user_id || 'scott');
+    form.append('session_id', 'console');
+    form.append('admin_key', key);
+    voiceStatus.className = 'voice-status';
+    voiceStatus.textContent = 'Override: adding clip + retraining speaker embedding…';
+    try {
+      const r = await fetch('/voiceprints/owner-override-enroll', { method: 'POST', body: form, credentials: 'same-origin' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'override failed');
+      const samples = d.sample_count || '?';
+      const link = d.speaker_linkage || {};
+      let linkText = '';
+      if (link.linked) {
+        const sid = link.matched_speaker_user_id || 'owner';
+        const method = link.method || 'linked';
+        linkText = ' · linked to global speaker "' + sid + '" (' + method + ')';
+      } else if (link.error) {
+        linkText = ' · speaker link: ' + link.error;
+      }
+      voiceStatus.className = 'voice-status link';
+      voiceStatus.textContent = 'Voiceprint strengthened (' + samples + ' samples)' + linkText + '. Re-verifying…';
+      await verifyVoiceCheck(false);
+    } catch (err) {
+      voiceStatus.className = 'voice-status bad';
+      voiceStatus.textContent = 'Override failed: ' + (err.message || err);
+    }
   }
 
   boot();

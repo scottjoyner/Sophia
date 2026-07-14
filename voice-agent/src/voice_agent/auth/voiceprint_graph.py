@@ -83,10 +83,10 @@ class VoiceprintGraphStore:
                     """,
                 ),
                 (
-                    "voiceprint_sample_embedding_idx",
+                    "speaker_embedding_idx",
                     f"""
-                    CREATE VECTOR INDEX voiceprint_sample_embedding_idx IF NOT EXISTS
-                    FOR (n:VoiceprintSample) ON (n.embedding)
+                    CREATE VECTOR INDEX speaker_embedding_idx IF NOT EXISTS
+                    FOR (n:Speaker) ON (n.embedding)
                     OPTIONS {{indexConfig: {{
                         `vector.dimensions`: {self.EMBEDDING_DIMENSION},
                         `vector.similarity_function`: 'COSINE'
@@ -438,7 +438,134 @@ class VoiceprintGraphStore:
             "active": True,
             "captured_in_graph": True,
         }
+        if device_id is None:
+            try:
+                record["speaker_linkage"] = self.link_identity_to_global_speakers(
+                    user_id, embedding_mean, match_threshold=threshold
+                )
+            except Exception as exc:
+                record["speaker_linkage"] = {"linked": False, "error": f"{type(exc).__name__}: {exc}"}
         return record
+
+    def link_identity_to_global_speakers(
+        self,
+        user_id: str,
+        embedding: Sequence[float],
+        *,
+        match_threshold: float = 0.85,
+    ) -> Dict[str, Any]:
+        """Resolve the owner's trained embedding into the global Speaker pool.
+
+        If a global Speaker already carries an embedding that is a strong match
+        (>= match_threshold), we cross-link the VoiceIdentity to that Speaker.
+        Otherwise we ensure the owner has their own Speaker node (seeded with the
+        embedding) and link to it. Either way the trained embedding becomes part
+        of the global speaker graph so future diarization/linkage can find it.
+        """
+        import os
+
+        if os.getenv("SOPHIA_GLOBAL_SPEAKER_LINK_ENABLED", "true").lower() not in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            return {"linked": False, "enabled": False, "reason": "disabled"}
+        try:
+            match_threshold = float(os.getenv("SOPHIA_GLOBAL_SPEAKER_LINK_THRESHOLD", str(match_threshold)))
+        except (TypeError, ValueError):
+            pass
+
+        driver = self._driver()
+        try:
+            with driver.session(database=self.database) as session:
+                best_row = None
+                try:
+                    rows = [
+                        dict(row)
+                        for row in session.run(
+                            """
+                            CALL db.index.vector.queryNodes('speaker_embedding_idx', 5, $embedding) YIELD node, score
+                            WHERE node:Speaker
+                            RETURN node.user_id AS speaker_user_id, score AS score
+                            ORDER BY score DESC LIMIT 1
+                            """,
+                            embedding=list(embedding),
+                        )
+                    ]
+                    if rows:
+                        best_row = rows[0]
+                except Exception:
+                    best_row = None
+
+                best_score = float(best_row["score"]) if best_row else 0.0
+                if best_row and str(best_row.get("speaker_user_id")) != str(user_id) and best_score >= match_threshold:
+                    speaker_user_id = str(best_row["speaker_user_id"])
+                    session.run(
+                        """
+                        MATCH (identity:VoiceIdentity {user_id: $user_id})
+                        MERGE (speaker:Speaker {user_id: $speaker_user_id})
+                          ON CREATE SET speaker.name = $speaker_user_id, speaker.created_at = datetime()
+                        SET speaker.embedding = $embedding, speaker.last_matched_at = datetime()
+                        MERGE (identity)-[r:IS_SPEAKER]->(speaker)
+                        SET r.score = $score, r.method = 'embedding_match', r.linked_at = datetime()
+                        """,
+                        user_id=user_id,
+                        speaker_user_id=speaker_user_id,
+                        embedding=list(embedding),
+                        score=best_score,
+                    )
+                    return {
+                        "linked": True,
+                        "enabled": True,
+                        "created": False,
+                        "matched_speaker_user_id": speaker_user_id,
+                        "score": best_score,
+                        "method": "embedding_match",
+                    }
+
+                method = "owner_voiceprint_created"
+                if best_row and str(best_row.get("speaker_user_id")) == str(user_id):
+                    method = "embedding_match_existing_owner"
+                session.run(
+                    """
+                    MERGE (speaker:Speaker {user_id: $user_id})
+                      ON CREATE SET speaker.name = $user_id, speaker.created_at = datetime()
+                    SET speaker.embedding = $embedding,
+                        speaker.is_owner_voiceprint = true,
+                        speaker.updated_at = datetime()
+                    WITH speaker
+                    MATCH (identity:VoiceIdentity {user_id: $user_id})
+                    MERGE (identity)-[r:IS_SPEAKER]->(speaker)
+                    SET r.score = 1.0, r.method = $method, r.linked_at = datetime()
+                    """,
+                    user_id=user_id,
+                    embedding=list(embedding),
+                    method=method,
+                )
+                return {
+                    "linked": True,
+                    "enabled": True,
+                    "created": True,
+                    "matched_speaker_user_id": user_id,
+                    "score": 1.0,
+                    "method": method,
+                }
+        finally:
+            driver.close()
+
+    def get_identity_linkage(self, user_id: str) -> List[Dict[str, Any]]:
+        query = """
+        MATCH (identity:VoiceIdentity {user_id: $user_id})-[r:IS_SPEAKER]->(speaker:Speaker)
+        RETURN speaker.user_id AS speaker_user_id,
+               speaker.name AS speaker_name,
+               coalesce(speaker.is_owner_voiceprint, false) AS is_owner,
+               r.score AS score,
+               r.method AS method,
+               r.linked_at AS linked_at
+        ORDER BY r.score DESC
+        """
+        return [dict(row) for row in self._query_all(query, user_id=user_id)]
 
     def get_active_records(self, user_id: str) -> List[Dict[str, Any]]:
         query = """

@@ -161,6 +161,7 @@ def enroll_from_files(
         "threshold": config.auth.threshold,
         "legacy_mean_preserved": legacy_mean_preserved,
         "errors": errors,
+        "speaker_linkage": saved_record.get("speaker_linkage"),
         "graph_saved": bool(saved_record.get("graph_saved") or saved_record.get("captured_in_graph")),
         "graph_enabled": bool(saved_record.get("graph_enabled")),
         "graph_error": saved_record.get("graph_error"),

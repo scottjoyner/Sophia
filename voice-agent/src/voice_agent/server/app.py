@@ -2285,6 +2285,56 @@ def create_app(config: AppConfig) -> FastAPI:
         bus.publish("voiceprint_owner_override_enrolled", payload)
         return {"ok": True, **payload}
 
+    @app.get("/voiceprints/linkage")
+    async def voiceprints_linkage() -> Dict[str, Any]:
+        owner = config.auth.owner_user_id
+        try:
+            registry = _voiceprint_registry()
+            rec = registry.get(owner)
+            embedding = (rec or {}).get("embedding") or []
+            graph = registry.graph
+            linked = []
+            if graph:
+                linked = graph.get_identity_linkage(owner)
+            return {
+                "owner_user_id": owner,
+                "has_embedding": bool(embedding),
+                "embedding_dim": len(embedding) if isinstance(embedding, list) else 0,
+                "linked_speakers": linked,
+                "link_enabled": config.auth.global_speaker_link_enabled,
+                "link_threshold": config.auth.global_speaker_link_threshold,
+            }
+        except Exception as exc:
+            return {
+                "owner_user_id": owner,
+                "linked_speakers": [],
+                "error": f"{type(exc).__name__}: {exc}",
+                "link_enabled": config.auth.global_speaker_link_enabled,
+            }
+
+    @app.post("/voiceprints/link-speakers")
+    async def voiceprints_link_speakers(
+        request: Request,
+        user_id: str = Form(default="scott"),
+        admin_key: str = Form(default=""),
+    ) -> Dict[str, Any]:
+        _require_owner_override(config, user_id, admin_key)
+        registry = _voiceprint_registry()
+        rec = registry.get(user_id)
+        embedding = (rec or {}).get("embedding")
+        if not embedding or not isinstance(embedding, list) or not embedding:
+            raise HTTPException(status_code=400, detail="No voiceprint embedding found for user; enroll first.")
+        graph = registry.graph
+        if not graph:
+            raise HTTPException(status_code=400, detail="Neo4j not configured; cannot link to global speakers.")
+        try:
+            linkage = graph.link_identity_to_global_speakers(
+                user_id, embedding, match_threshold=config.auth.global_speaker_link_threshold
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+        return {"ok": True, "user_id": user_id, "speaker_linkage": linkage}
+
     @app.post("/voiceprints/train-neo4j")
     async def train_voiceprint_from_neo4j(req: Neo4jEnrollRequest) -> Dict[str, Any]:
         uri = req.neo4j_uri or config.neo4j.uri

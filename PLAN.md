@@ -234,3 +234,19 @@ AssistX auto-router (small model), and automatically turns requests into tasks i
 | `server/assistx_dispatch.py` | Shared AssistX event builder + signed HTTP dispatch |
 | `server/assistant.py` | Realtime reply, task extraction, AssistX ingestion |
 | `llm/openai_compat_provider.py` | Added `stream_complete` (SSE) |
+| `auth/voiceprint_graph.py` | `link_identity_to_global_speakers` + `get_identity_linkage` (global Speaker linking) |
+
+### Voice authentication: override-as-training + global speaker linking
+- Voice auth (`POST /auth/verify`) runs first. Below threshold → rejected, but the **Override & retrain**
+  action stays available in the console identity strip.
+- Override (owner key) calls `POST /voiceprints/owner-override-enroll`, which **auto-includes the clip**
+  (`append=True`) and **retrains the speaker embedding** (mean of all enrolled samples); the console then
+  re-verifies to show the improved score — the continuous-improvement loop for the owner voiceprint.
+- Every identity-scope enrollment links the trained embedding into the **global Neo4j `Speaker` pool**
+  (`VoiceprintGraphStore.link_identity_to_global_speakers`): it seeds/updates the owner's `Speaker` node with
+  the embedding and `(VoiceIdentity)-[:IS_SPEAKER]->(Speaker)`. If another global `Speaker` already carries a
+  matching embedding (>= `global_speaker_link_threshold`, default 0.85), it cross-links instead — the
+  foundation for linking the owner to the rest of the global speakers.
+- `GET /voiceprints/linkage` reports linked global speakers; `POST /voiceprints/link-speakers` forces a re-link.
+- Config/env: `auth.global_speaker_link_enabled` (true), `auth.global_speaker_link_threshold` (0.85),
+  `SOPHIA_GLOBAL_SPEAKER_LINK_ENABLED` / `SOPHIA_GLOBAL_SPEAKER_LINK_THRESHOLD`.

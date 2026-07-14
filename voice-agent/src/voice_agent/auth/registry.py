@@ -151,6 +151,7 @@ class VoiceprintRegistry:
         record["graph_saved"] = bool(graph_result)
         record["graph_error"] = graph_error
         record["graph_enabled"] = bool(self.graph)
+        record["speaker_linkage"] = (graph_result or {}).get("speaker_linkage")
         return record
 
     def get(self, user_id: str) -> Dict[str, Any] | None:
