@@ -55,6 +55,8 @@ class LLMConfig(BaseModel):
     intent_base_url: Optional[str] = None
     intent_api_key: Optional[str] = None
     intent_model: str = "draft-model"
+    task_model: Optional[str] = None
+    timeout: float = 60.0
     max_steps: int = 4
     system_prompt: str = (
         "You are Sophia voice overlay for Hermes. Keep responses concise, actionable, and safe."
@@ -148,6 +150,14 @@ def _apply_env(config: AppConfig) -> AppConfig:
     if os.getenv("SOPHIA_CAPTURE_DIR"):
         config.paths = config.paths.model_copy(update={"capture_dir": os.environ["SOPHIA_CAPTURE_DIR"]})
     llm_update = {}
+    if os.getenv("SOPHIA_LLM_PROVIDER"):
+        llm_update["provider"] = os.environ["SOPHIA_LLM_PROVIDER"]
+    if os.getenv("SOPHIA_LLM_BASE_URL"):
+        llm_update["base_url"] = os.environ["SOPHIA_LLM_BASE_URL"]
+    if os.getenv("SOPHIA_LLM_API_KEY"):
+        llm_update["api_key"] = os.environ["SOPHIA_LLM_API_KEY"]
+    if os.getenv("SOPHIA_LLM_MODEL"):
+        llm_update["model"] = os.environ["SOPHIA_LLM_MODEL"]
     if os.getenv("SOPHIA_INTENT_PROVIDER"):
         llm_update["intent_provider"] = os.environ["SOPHIA_INTENT_PROVIDER"]
     if os.getenv("SOPHIA_INTENT_BASE_URL"):
@@ -156,6 +166,10 @@ def _apply_env(config: AppConfig) -> AppConfig:
         llm_update["intent_api_key"] = os.environ["SOPHIA_INTENT_API_KEY"]
     if os.getenv("SOPHIA_INTENT_MODEL"):
         llm_update["intent_model"] = os.environ["SOPHIA_INTENT_MODEL"]
+    if os.getenv("SOPHIA_TASK_MODEL"):
+        llm_update["task_model"] = os.environ["SOPHIA_TASK_MODEL"]
+    if os.getenv("SOPHIA_LLM_TIMEOUT"):
+        llm_update["timeout"] = float(os.environ["SOPHIA_LLM_TIMEOUT"])
     if llm_update:
         config.llm = config.llm.model_copy(update=llm_update)
 

@@ -8,22 +8,31 @@ from .provider_base import LLMProvider, LLMResponse
 
 
 class OpenAICompatProvider(LLMProvider):
-    def __init__(self, base_url: str, api_key: str | None, model: str):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str | None,
+        model: str,
+        timeout: float = 60.0,
+        task_model: str | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
+        self.task_model = task_model or model
+        self.timeout = timeout
 
     def complete(self, prompt: str) -> LLMResponse:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         payload = {
-            "model": self.model,
+            "model": self.task_model,
             "messages": [
                 {"role": "user", "content": prompt},
             ],
         }
-        resp = requests.post(f"{self.base_url}/v1/chat/completions", headers=headers, json=payload, timeout=30)
+        resp = requests.post(f"{self.base_url}/v1/chat/completions", headers=headers, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
@@ -45,7 +54,7 @@ class OpenAICompatProvider(LLMProvider):
             headers=headers,
             json=payload,
             stream=True,
-            timeout=90,
+            timeout=self.timeout,
         )
         resp.raise_for_status()
         for raw in resp.iter_lines():
@@ -60,6 +69,11 @@ class OpenAICompatProvider(LLMProvider):
             try:
                 obj = json.loads(data)
                 delta = obj["choices"][0]["delta"].get("content")
+                if not delta:
+                    # Some local/reasoning models stream their output under
+                    # reasoning_content instead of content; surface it so the
+                    # caller still sees a response.
+                    delta = obj["choices"][0]["delta"].get("reasoning_content")
                 if delta:
                     yield delta
             except Exception:

@@ -40,6 +40,7 @@ CONSOLE_PAGE = """<!doctype html>
     .login-card button { width: 100%; background: var(--accent); color: #061014; }
     .login-card button:hover { background: #67c5f0; }
     .login-error { color: var(--red); font-size: 13px; min-height: 18px; margin-top: 10px; }
+    #loginMic.rec, #micBtn.rec { box-shadow: 0 0 0 2px var(--red); }
 
     #app { display: none; height: 100vh; flex-direction: column; }
     header.topbar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 10; flex-wrap: wrap; }
@@ -140,10 +141,26 @@ CONSOLE_PAGE = """<!doctype html>
   <div id="login">
     <form class="login-card" id="loginForm">
       <h1>Sophia <span>Console</span></h1>
-      <p>Authenticate to access the assistant, voice identity, and task console.</p>
-      <label for="pass" style="font-size:12px;color:var(--muted);">Passphrase</label>
-      <input id="pass" type="password" autocomplete="current-password" placeholder="enter passphrase" style="margin-top:6px;">
-      <button type="submit" id="loginBtn" style="margin-top:14px;">Unlock</button>
+      <p>Voice is your primary key. Speak to unlock — your passphrase is a fallback only.</p>
+
+      <div class="identity-strip" style="border:0;background:transparent;padding:0;margin-bottom:10px;">
+        <button class="mic" id="loginMic" type="button" style="background:var(--panel-2);border:1px solid var(--border-2);color:var(--text);flex:0 0 auto;min-width:54px;min-height:48px;font-size:18px;">🎙</button>
+        <button type="button" id="voiceLoginBtn" style="flex:1;background:var(--accent);color:#061014;">Unlock with voice</button>
+      </div>
+      <div id="voiceLoginStatus" class="login-error" style="margin-top:-2px;margin-bottom:6px;color:var(--muted);">Hold 🎙 to record, then Unlock with voice.</div>
+
+      <div style="display:flex;align-items:center;gap:8px;margin:4px 0 10px;">
+        <div style="flex:1;height:1px;background:var(--border);"></div>
+        <button type="button" id="passToggle" style="background:none;border:0;color:var(--muted);font-weight:500;font-size:12px;min-height:0;padding:4px 6px;">Use passphrase instead</button>
+        <div style="flex:1;height:1px;background:var(--border);"></div>
+      </div>
+
+      <div id="passRow" class="hidden">
+        <label for="pass" style="font-size:12px;color:var(--muted);">Passphrase (fallback)</label>
+        <input id="pass" type="password" autocomplete="current-password" placeholder="enter passphrase" style="margin-top:6px;">
+        <button type="submit" id="loginBtn" style="margin-top:14px;background:var(--panel-2);color:var(--text);border:1px solid var(--border-2);">Unlock with passphrase</button>
+      </div>
+
       <div class="login-error" id="loginError"></div>
     </form>
   </div>
@@ -192,6 +209,11 @@ CONSOLE_PAGE = """<!doctype html>
             <div class="identity-strip" style="margin-top:10px;">
               <button class="id-btn" id="backfillBtn" type="button" title="Re-link all enrolled voiceprints into the global Speaker pool">Backfill global speakers</button>
               <span id="backfillStatus" class="voice-status"></span>
+            </div>
+            <div class="identity-strip" style="margin-top:10px;">
+              <input id="enrollName" placeholder="new speaker name (user id)" style="flex:1;min-width:120px;">
+              <button class="id-btn" id="enrollBtn" type="button" style="background:var(--accent);color:#061014;">Enroll new speaker</button>
+              <span id="enrollStatus" class="voice-status"></span>
             </div>
             <div id="voiceHealth"></div>
           </div>
@@ -379,7 +401,56 @@ CONSOLE_PAGE = """<!doctype html>
     } catch { const p = $('assistxPill'); p.className = 'pill warn'; p.textContent = 'assistx: unknown'; }
   }
 
-  // ---- Login ----
+  // ---- Login (voice primary, passphrase secondary) ----
+  const loginMic = $('loginMic'), voiceLoginBtn = $('voiceLoginBtn'), voiceLoginStatus = $('voiceLoginStatus');
+  $('passToggle').addEventListener('click', () => { $('passRow').classList.remove('hidden'); $('passToggle').classList.add('hidden'); $('pass').focus(); });
+  loginMic.addEventListener('mousedown', startLoginVoice);
+  loginMic.addEventListener('mouseup', stopLoginVoice);
+  loginMic.addEventListener('mouseleave', stopLoginVoice);
+  loginMic.addEventListener('touchstart', (e) => { e.preventDefault(); startLoginVoice(); });
+  loginMic.addEventListener('touchend', (e) => { e.preventDefault(); stopLoginVoice(); });
+
+  async function startLoginVoice() {
+    if (!navigator.mediaDevices || !window.MediaRecorder) { toast('Voice unlock needs a secure context + mic.'); return; }
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recorder = new MediaRecorder(micStream);
+      micChunks = [];
+      recorder.ondataavailable = (ev) => { if (ev.data.size) micChunks.push(ev.data); };
+      recorder.start();
+      loginMic.classList.add('rec'); loginMic.textContent = '●';
+      voiceLoginStatus.className = 'login-error'; voiceLoginStatus.style.color = 'var(--muted)'; voiceLoginStatus.textContent = 'Recording… release to finish.';
+    } catch { toast('Microphone blocked.'); }
+  }
+  async function stopLoginVoice() {
+    if (!recorder || recorder.state === 'inactive') return;
+    loginMic.classList.remove('rec'); loginMic.textContent = '🎙';
+    const stopped = new Promise((res) => recorder.onstop = res);
+    recorder.stop(); await stopped;
+    if (micStream) micStream.getTracks().forEach(t => t.stop());
+    const blob = new Blob(micChunks, { type: recorder.mimeType || 'audio/webm' });
+    lastVoiceBlob = blob;
+    if (!blob.size) return;
+    voiceLoginStatus.className = 'login-error'; voiceLoginStatus.style.color = 'var(--muted)'; voiceLoginStatus.textContent = 'Clip ready — tap “Unlock with voice”.';
+  }
+  voiceLoginBtn.addEventListener('click', async () => {
+    if (!lastVoiceBlob || !lastVoiceBlob.size) { voiceLoginStatus.className = 'login-error'; voiceLoginStatus.style.color = 'var(--red)'; voiceLoginStatus.textContent = 'Record a voice clip first (hold 🎙).'; return; }
+    voiceLoginBtn.disabled = true; voiceLoginStatus.className = 'login-error'; voiceLoginStatus.style.color = 'var(--muted)'; voiceLoginStatus.textContent = 'Verifying voice identity…';
+    const form = new FormData();
+    form.append('audio', lastVoiceBlob, 'voice-login.webm');
+    form.append('user_id', 'scott');
+    form.append('session_id', 'console');
+    try {
+      const r = await api('/auth/voice-login', { method: 'POST', body: form });
+      const d = await r.json();
+      if (r.ok && d.authenticated) { location.reload(); return; }
+      const pct = ((d.score || 0) * 100).toFixed(0);
+      voiceLoginStatus.className = 'login-error'; voiceLoginStatus.style.color = 'var(--red)';
+      voiceLoginStatus.textContent = 'Voice rejected ' + pct + '% — try again or use your passphrase.';
+    } catch { voiceLoginStatus.className = 'login-error'; voiceLoginStatus.style.color = 'var(--red)'; voiceLoginStatus.textContent = 'Voice unlock failed.'; }
+    finally { voiceLoginBtn.disabled = false; }
+  });
+
   $('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = $('loginBtn'); btn.disabled = true; $('loginError').textContent = '';
@@ -544,6 +615,27 @@ CONSOLE_PAGE = """<!doctype html>
   verifyBtn.addEventListener('click', () => verifyVoiceCheck(false));
   overrideBtn.addEventListener('click', overrideAndTrain);
   $('backfillBtn').addEventListener('click', backfillGlobalSpeakers);
+
+  const enrollName = $('enrollName'), enrollBtn = $('enrollBtn'), enrollStatus = $('enrollStatus');
+  enrollBtn.addEventListener('click', async () => {
+    const name = (enrollName.value || '').trim();
+    if (!name) { enrollStatus.className = 'voice-status bad'; enrollStatus.textContent = 'Enter a speaker name (user id).'; return; }
+    if (!lastVoiceBlob || !lastVoiceBlob.size) { enrollStatus.className = 'voice-status bad'; enrollStatus.textContent = 'Record a voice clip first (hold 🎙).'; return; }
+    const form = new FormData();
+    form.append('audio', lastVoiceBlob, 'enroll.webm');
+    form.append('user_id', name);
+    form.append('force', 'false');
+    enrollStatus.className = 'voice-status'; enrollStatus.textContent = 'Enrolling "' + name + '"…';
+    try {
+      const r = await api('/voiceprints/enroll', { method: 'POST', body: form });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'enroll failed');
+      const samples = d.sample_count || '?';
+      enrollStatus.className = 'voice-status link';
+      enrollStatus.textContent = 'Enrolled "' + name + '" (' + samples + ' samples).';
+      refreshVoiceHealth();
+    } catch (err) { enrollStatus.className = 'voice-status bad'; enrollStatus.textContent = 'Enroll failed: ' + (err.message || err); }
+  });
 
   async function backfillGlobalSpeakers() {
     const btn = $('backfillBtn'); const status = $('backfillStatus');

@@ -334,3 +334,49 @@ class VoiceprintRegistry:
         if not self.graph:
             return {"ok": False, "error": "Neo4j not configured"}
         return {"ok": True, **self.graph.backfill_global_speaker_embeddings(match_threshold=match_threshold)}
+
+    def reconcile_to_neo4j(self, source: str = "reconcile", force: bool = False) -> Dict[str, Any]:
+        """Push locally-stored voiceprints (SQLite) into Neo4j so the graph stays
+        eventually consistent when enrollments happened while Neo4j was unavailable.
+
+        Skips a (user, device) when the graph already holds an identical active
+        embedding, to avoid churning VoiceprintVersion history on every run.
+        """
+        if not self.graph:
+            return {"ok": False, "error": "Neo4j not configured"}
+        summary: Dict[str, Any] = {"synced": 0, "skipped": 0, "errors": 0, "users": []}
+        for uid in self.list_users():
+            try:
+                records = self.get_all_for_user(uid)
+                for rec in records:
+                    emb = rec.get("embedding") or []
+                    if not emb:
+                        continue
+                    device_id = rec.get("device_id")
+                    if device_id in (None, "default"):
+                        device_id = None
+                    if not force:
+                        existing = (
+                            self.graph.get_active_record(uid)
+                            if device_id is None
+                            else self.graph.get_device_record(uid, device_id)
+                        )
+                        if existing and list(existing.get("embedding") or []) == list(emb):
+                            summary["skipped"] += 1
+                            continue
+                    self.graph.save_voiceprint(
+                        user_id=uid,
+                        embedding_mean=emb,
+                        samples=rec.get("samples") or {"samples": []},
+                        threshold=float(rec.get("threshold") or 0.6),
+                        source=source,
+                        append=False,
+                        device_id=device_id,
+                    )
+                    summary["synced"] += 1
+                summary["users"].append({"user_id": uid, "synced": summary["synced"]})
+            except Exception as exc:
+                summary["errors"] += 1
+                summary["users"].append({"user_id": uid, "error": f"{type(exc).__name__}: {exc}"})
+        summary["ok"] = True
+        return summary

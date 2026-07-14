@@ -16,6 +16,11 @@ x-sophia-env: &sophia-env
   SOPHIA_INTENT_BASE_URL: ${SOPHIA_INTENT_BASE_URL:-}
   SOPHIA_INTENT_API_KEY: ${SOPHIA_INTENT_API_KEY:-}
   SOPHIA_INTENT_MODEL: ${SOPHIA_INTENT_MODEL:-draft-model}
+  SOPHIA_LLM_PROVIDER: ${SOPHIA_LLM_PROVIDER:-}
+  SOPHIA_LLM_BASE_URL: ${SOPHIA_LLM_BASE_URL:-}
+  SOPHIA_LLM_MODEL: ${SOPHIA_LLM_MODEL:-}
+  SOPHIA_TASK_MODEL: ${SOPHIA_TASK_MODEL:-}
+  SOPHIA_LLM_TIMEOUT: ${SOPHIA_LLM_TIMEOUT:-}
   SOPHIA_OWNER_OVERRIDE_ENABLED: ${SOPHIA_OWNER_OVERRIDE_ENABLED:-true}
   SOPHIA_OWNER_OVERRIDE_TOKEN: ${SOPHIA_OWNER_OVERRIDE_TOKEN:-}
   ASSISTX_BASIC_AUTH_USER: ${ASSISTX_BASIC_AUTH_USER:-admin}
@@ -58,6 +63,30 @@ services:
     command:
       - python
       - scripts/run_graph_outbox_worker.py
+      - --config
+      - configs/container.yaml
+      - --artifacts-dir
+      - /data
+      - --interval-seconds
+      - "30"
+      - --json
+    environment: *sophia-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes: *sophia-volumes
+    restart: unless-stopped
+    depends_on:
+      - sophia-voice
+
+  voiceprint-reconcile-worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      args:
+        INSTALL_VOICE_INSIGHT_DEPS: 1
+    command:
+      - python
+      - scripts/reconcile_voiceprints.py
       - --config
       - configs/container.yaml
       - --artifacts-dir

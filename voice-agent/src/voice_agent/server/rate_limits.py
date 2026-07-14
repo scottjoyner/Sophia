@@ -24,6 +24,7 @@ class RateLimitRule:
 
 DEFAULT_RATE_LIMIT_RULES = (
     RateLimitRule("/auth/login", 10, 60),
+    RateLimitRule("/auth/voice-login", 20, 60),
     RateLimitRule("/auth/verify", 20, 60),
     RateLimitRule("/api/chat/stream", 30, 60),
     RateLimitRule("/voiceprints/enroll", 10, 60),

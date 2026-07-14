@@ -37,6 +37,7 @@ from .assistant import Assistant
 from .auth_session import (
     SESSION_COOKIE,
     SESSION_TTL_SECONDS,
+    create_session_token,
     login as auth_login_check,
     require_session,
     verify_session_token,
@@ -1945,6 +1946,44 @@ def create_app(config: AppConfig) -> FastAPI:
         resp.delete_cookie(SESSION_COOKIE)
         return resp
 
+    @app.post("/auth/voice-login")
+    async def auth_voice_login(
+        request: Request,
+        audio: UploadFile = File(...),
+        user_id: str = Form(default="default"),
+        session_id: str = Form(default="console"),
+    ) -> Response:
+        src_path = await _save_upload_for_audio_processing(config, audio, "voice-login")
+        wav_path = src_path
+        try:
+            wav_path = _ensure_wav_for_processing(src_path)
+            samples, sr = read_wav(str(wav_path))
+            payload = verify_audio_segment(config, session_id, user_id, samples, sr)
+            payload["source"] = "ui_voice_login"
+            payload["neo4j_logged"] = _log_voice_ui_event_to_neo4j("voice_auth_verified", payload)
+            bus.publish("ui_voice_auth_verified", payload)
+            if not payload.get("accepted"):
+                return JSONResponse(
+                    {"ok": True, "authenticated": False, **payload},
+                    status_code=401,
+                )
+            token = create_session_token()
+            user_id_out = config.auth.owner_user_id
+            resp = JSONResponse({"ok": True, "authenticated": True, "user_id": user_id_out, **payload})
+            resp.set_cookie(
+                SESSION_COOKIE,
+                token,
+                httponly=True,
+                samesite="strict",
+                max_age=SESSION_TTL_SECONDS,
+                secure=request.url.scheme == "https",
+            )
+            return resp
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+        finally:
+            _cleanup_paths(src_path, wav_path if wav_path != src_path else Path("__missing__"))
+
     @app.post("/api/chat/stream")
     async def chat_stream(request: Request, payload: ChatRequest):
         require_session(request)
@@ -1958,8 +1997,16 @@ def create_app(config: AppConfig) -> FastAPI:
                 for delta in assistant.stream_reply(messages):
                     full.append(delta)
                     yield "data: " + json.dumps({"type": "token", "text": delta}) + "\n\n"
+            except Exception as exc:
+                yield "data: " + json.dumps({"type": "error", "error": f"stream failed: {type(exc).__name__}: {exc}"}) + "\n\n"
+                return
+            try:
                 reply = "".join(full)
-                conversation = "\n".join(f"{m['role']}: {m['content']}" for m in messages if m.get("role") in {"user", "assistant"})
+                conversation = "\n".join(
+                    f"{m.get('role', '?')}: {m.get('content', '')}"
+                    for m in messages
+                    if m.get("role") in {"user", "assistant"}
+                )
                 tasks = assistant.extract_tasks(conversation)
                 if tasks:
                     yield "data: " + json.dumps({"type": "tasks", "tasks": tasks}) + "\n\n"
@@ -1969,9 +2016,10 @@ def create_app(config: AppConfig) -> FastAPI:
                         actor={"user_id": user_id, "device_id": None},
                     )
                     yield "data: " + json.dumps({"type": "ingested", "results": results}) + "\n\n"
-                yield "data: " + json.dumps({"type": "done"}) + "\n\n"
             except Exception as exc:
-                yield "data: " + json.dumps({"type": "error", "error": f"{type(exc).__name__}: {exc}"}) + "\n\n"
+                # Task extraction/ingestion must never break the delivered answer.
+                yield "data: " + json.dumps({"type": "error", "error": f"task extraction failed: {type(exc).__name__}: {exc}"}) + "\n\n"
+            yield "data: " + json.dumps({"type": "done"}) + "\n\n"
 
         return StreamingResponse(
             event_gen(),
@@ -2365,6 +2413,21 @@ def create_app(config: AppConfig) -> FastAPI:
             raise HTTPException(status_code=400, detail="Neo4j not configured; cannot backfill global speakers.")
         try:
             return {"ok": True, **registry.backfill_global_speaker_embeddings(match_threshold=match_threshold)}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+
+    @app.post("/voiceprints/reconcile")
+    async def voiceprints_reconcile(
+        request: Request,
+        admin_key: str = Form(default=""),
+        force: bool = Form(default=False),
+    ) -> Dict[str, Any]:
+        _require_owner_override(config, config.auth.owner_user_id, admin_key)
+        registry = _voiceprint_registry()
+        if not registry.graph:
+            raise HTTPException(status_code=400, detail="Neo4j not configured; cannot reconcile.")
+        try:
+            return {"ok": True, **registry.reconcile_to_neo4j(force=force)}
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
 
