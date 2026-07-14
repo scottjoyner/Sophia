@@ -32,6 +32,7 @@ from .assistx_dispatch import (
     build_voice_event,
     dispatch_to_assistx,
 )
+from .rate_limits import install_rate_limiter
 from .assistant import Assistant
 from .auth_session import (
     SESSION_COOKIE,
@@ -1734,6 +1735,7 @@ async def _process_meeting_background(
 
 def create_app(config: AppConfig) -> FastAPI:
     app = FastAPI(title="Sophia Voice Agent", version="0.1.0")
+    install_rate_limiter(app)
     bus = EventBus()
     manager = SessionManager(
         config,
@@ -1747,6 +1749,20 @@ def create_app(config: AppConfig) -> FastAPI:
     app.state.events = bus
     app.state.meeting_tasks = meeting_tasks
     app.state.assistant = Assistant(config)
+
+    import logging
+
+    _logger = logging.getLogger("sophia.voice_agent")
+    if not (os.getenv("SOPHIA_SESSION_SECRET") or os.getenv("SOPHIA_OWNER_OVERRIDE_TOKEN")):
+        _logger.warning(
+            "SOPHIA_SESSION_SECRET is not set; using an insecure default session secret. "
+            "Set SOPHIA_SESSION_SECRET (and SOPHIA_APP_PASSWORD) before exposing this service."
+        )
+    if not (os.getenv("SOPHIA_APP_PASSWORD") or os.getenv("SOPHIA_OWNER_OVERRIDE_TOKEN")):
+        _logger.warning(
+            "SOPHIA_APP_PASSWORD is not set; using the default console password 'sophia'. "
+            "Set SOPHIA_APP_PASSWORD before exposing this service."
+        )
     intent_provider = None
     if config.llm.intent_provider in {"openai", "hermes"} and config.llm.intent_base_url:
         intent_provider = OpenAICompatProvider(
@@ -1994,6 +2010,8 @@ def create_app(config: AppConfig) -> FastAPI:
                 "intent_provider": config.llm.intent_provider,
                 "intent_model": config.llm.intent_model,
                 "intent_draft_enabled": bool(intent_provider),
+                "assistant_configured": app.state.assistant.configured,
+                "assistant_model": app.state.assistant.model_label,
             },
             "tts": {"backend": config.tts.backend},
             "memory_graph": _neo4j_write_status(),

@@ -250,3 +250,42 @@ AssistX auto-router (small model), and automatically turns requests into tasks i
 - `GET /voiceprints/linkage` reports linked global speakers; `POST /voiceprints/link-speakers` forces a re-link.
 - Config/env: `auth.global_speaker_link_enabled` (true), `auth.global_speaker_link_threshold` (0.85),
   `SOPHIA_GLOBAL_SPEAKER_LINK_ENABLED` / `SOPHIA_GLOBAL_SPEAKER_LINK_THRESHOLD`.
+
+## Phase 12: Console Coherence, Hardening & Parity (2026-07-14)
+
+**Goal**: Bring the new console to production quality — secure defaults, honest status, abuse
+protection, feature parity with the legacy UI, and offline resilience.
+
+### Secure-default warnings
+- `create_app` logs a clear warning when `SOPHIA_SESSION_SECRET` (insecure default session secret) or
+  `SOPHIA_APP_PASSWORD` (default `'sophia'`) is unset, so the service is never silently deployed insecure.
+
+### Honest model status
+- `Assistant.configured` (true when a real `OpenAICompatProvider` is selected) and `Assistant.model_label`
+  are exposed under `/status` → `llm.assistant_configured` / `llm.assistant_model`, so the console pill
+  shows `model: mock (no LLM configured)` instead of pretending an auto-router is connected.
+
+### Abuse protection (rate limiting)
+- `server/rate_limits.py` `InMemoryRateLimiter` is installed in `create_app`. Rules: `/auth/login`
+  (10 req / 60s) and `/api/chat/stream` (30 req / 60s). The 11th login within a minute returns 429.
+
+### Feature parity with the legacy UI
+- The console is now a tabbed SPA covering every legacy capability:
+  - **Chat**: streaming AssistX auto-router + auto task ingestion.
+  - **Voice**: live voice check (`/auth/verify`), owner override & retrain
+    (`/voiceprints/owner-override-enroll`), and a **Voiceprint Health** + **Global Speaker Linkage**
+    panel polling `/voiceprints/status` and `/voiceprints/linkage`.
+  - **Meetings**: upload → process → transcript/summary → dispatch (parity with legacy meeting mode).
+  - **Dispatch**: manual event send + AssistX trace polling (`/dispatch/trace/<id>`) for full visibility.
+- A live `WebSocket` (`/events`) drives the `liveDot` and event feed; AssistX traces poll automatically
+  when a task is ingested, mirroring the legacy dispatch visibility.
+
+### Offline-first resilience
+- The console tracks connectivity via `navigator.onLine` and `online`/`offline` events (a `net:` pill in
+  the top bar). Failed chat messages and voice checks are **queued** and automatically retried when the
+  connection returns, so brief disconnects never lose an action.
+
+### Tests
+- `tests/test_console_overhaul.py`: login flow + cookie, 401 on unauth chat, SSE token/tasks/ingested
+  shape, honest `/status` model reporting, graceful `/voiceprints/linkage` without Neo4j, and console +
+  legacy homepage render. Full suite: 40 passed, 11 skipped (Neo4j-dependent).

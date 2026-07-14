@@ -34,6 +34,10 @@ class Assistant:
         return MockProvider()
 
     @property
+    def configured(self) -> bool:
+        return isinstance(self.provider, OpenAICompatProvider)
+
+    @property
     def model_label(self) -> str:
         if isinstance(self.provider, OpenAICompatProvider):
             return self.provider.model
