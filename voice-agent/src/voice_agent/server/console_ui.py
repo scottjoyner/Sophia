@@ -377,6 +377,8 @@ CONSOLE_PAGE = """<!doctype html>
     $('authPill').textContent = 'user: ' + (sessionMeta.user_id || 'scott');
     await refreshStatus();
     connectEvents();
+    pollEvents();
+    setInterval(pollEvents, 3000);
     addMessage('assistant', "Welcome to Sophia Console. I'm connected to the AssistX auto-router. Ask me anything — if you request a task, I'll extract it and route it to AssistX automatically.");
   }
 
@@ -592,6 +594,25 @@ CONSOLE_PAGE = """<!doctype html>
     }
   }
   function cssEscape(s) { return String(s).replace(/[^a-zA-Z0-9_-]/g, c => '\\\\' + c); }
+
+  // Task extraction runs in the background (slow LLM); results arrive via /events.
+  let lastEventId = 0;
+  async function pollEvents() {
+    try {
+      const d = await (await api('/events?after_id=' + lastEventId + '&session_id=console')).json();
+      const evs = d.events || [];
+      for (const ev of evs) {
+        lastEventId = Math.max(lastEventId, ev.id || 0);
+        if (ev.type === 'tasks_ingested') {
+          (ev.payload.results || []).forEach(r => { addTaskCard(r); if (r.correlation_id) pollTrace(r.correlation_id, r.task); });
+          refreshTaskCount();
+        } else if (ev.type === 'tasks_extracted') {
+          const n = (ev.payload.tasks || []).length;
+          if (n) toast(n + ' task(s) extracted — routing to AssistX…');
+        }
+      }
+    } catch {}
+  }
 
   function sendMessage() {
     const text = composer.value.trim();

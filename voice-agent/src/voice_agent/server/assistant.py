@@ -39,6 +39,7 @@ class Assistant:
                 llm.intent_model,
                 timeout=llm.timeout,
                 task_model=llm.task_model,
+                task_timeout=llm.task_timeout,
             )
         if llm.provider in {"openai", "hermes"} and llm.base_url:
             return OpenAICompatProvider(
@@ -47,6 +48,7 @@ class Assistant:
                 llm.model,
                 timeout=llm.timeout,
                 task_model=llm.task_model,
+                task_timeout=llm.task_timeout,
             )
         return MockProvider()
 

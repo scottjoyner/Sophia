@@ -57,6 +57,7 @@ class LLMConfig(BaseModel):
     intent_model: str = "draft-model"
     task_model: Optional[str] = None
     timeout: float = 60.0
+    task_timeout: Optional[float] = None
     max_steps: int = 4
     system_prompt: str = (
         "You are Sophia voice overlay for Hermes. Keep responses concise, actionable, and safe."
@@ -170,6 +171,8 @@ def _apply_env(config: AppConfig) -> AppConfig:
         llm_update["task_model"] = os.environ["SOPHIA_TASK_MODEL"]
     if os.getenv("SOPHIA_LLM_TIMEOUT"):
         llm_update["timeout"] = float(os.environ["SOPHIA_LLM_TIMEOUT"])
+    if os.getenv("SOPHIA_TASK_TIMEOUT"):
+        llm_update["task_timeout"] = float(os.environ["SOPHIA_TASK_TIMEOUT"])
     if llm_update:
         config.llm = config.llm.model_copy(update=llm_update)
 

@@ -1734,6 +1734,32 @@ async def _process_meeting_background(
                 p.unlink(missing_ok=True)
 
 
+async def _background_extract(assistant, conversation: str, session_id: str, user_id: str, bus) -> None:
+    """Extract tasks from a conversation and ingest them to AssistX without
+    blocking the chat response. Runs the (slow) LLM + dispatch calls in a
+    thread executor and publishes results on the event bus for the console."""
+    loop = asyncio.get_running_loop()
+    try:
+        tasks = await loop.run_in_executor(None, assistant.extract_tasks, conversation)
+        if not tasks:
+            return
+        bus.publish("tasks_extracted", {"tasks": tasks, "session_id": session_id})
+        results = await loop.run_in_executor(
+            None,
+            lambda: assistant.ingest_tasks(
+                tasks,
+                session_id=session_id,
+                actor={"user_id": user_id, "device_id": None},
+            ),
+        )
+        bus.publish("tasks_ingested", {"results": results, "session_id": session_id})
+    except Exception as exc:
+        bus.publish(
+            "task_extraction_error",
+            {"error": f"{type(exc).__name__}: {exc}", "session_id": session_id},
+        )
+
+
 def create_app(config: AppConfig) -> FastAPI:
     app = FastAPI(title="Sophia Voice Agent", version="0.1.0")
     install_rate_limiter(app)
@@ -1990,6 +2016,18 @@ def create_app(config: AppConfig) -> FastAPI:
         assistant = request.app.state.assistant
         messages = payload.messages or [{"role": "user", "content": "hello"}]
         user_id = config.auth.owner_user_id
+        session_id = payload.session_id or "console"
+        conversation = "\n".join(
+            f"{m.get('role', '?')}: {m.get('content', '')}"
+            for m in messages
+            if m.get("role") in {"user", "assistant"}
+        )
+        # Extract + ingest in the background so the (often slow) LLM call never
+        # blocks the streamed answer. Results arrive at the console via /events.
+        try:
+            asyncio.create_task(_background_extract(assistant, conversation, session_id, user_id, bus))
+        except Exception:
+            pass
 
         def event_gen():
             full: list = []
@@ -2000,25 +2038,6 @@ def create_app(config: AppConfig) -> FastAPI:
             except Exception as exc:
                 yield "data: " + json.dumps({"type": "error", "error": f"stream failed: {type(exc).__name__}: {exc}"}) + "\n\n"
                 return
-            try:
-                reply = "".join(full)
-                conversation = "\n".join(
-                    f"{m.get('role', '?')}: {m.get('content', '')}"
-                    for m in messages
-                    if m.get("role") in {"user", "assistant"}
-                )
-                tasks = assistant.extract_tasks(conversation)
-                if tasks:
-                    yield "data: " + json.dumps({"type": "tasks", "tasks": tasks}) + "\n\n"
-                    results = assistant.ingest_tasks(
-                        tasks,
-                        session_id=payload.session_id or "console",
-                        actor={"user_id": user_id, "device_id": None},
-                    )
-                    yield "data: " + json.dumps({"type": "ingested", "results": results}) + "\n\n"
-            except Exception as exc:
-                # Task extraction/ingestion must never break the delivered answer.
-                yield "data: " + json.dumps({"type": "error", "error": f"task extraction failed: {type(exc).__name__}: {exc}"}) + "\n\n"
             yield "data: " + json.dumps({"type": "done"}) + "\n\n"
 
         return StreamingResponse(

@@ -15,12 +15,14 @@ class OpenAICompatProvider(LLMProvider):
         model: str,
         timeout: float = 60.0,
         task_model: str | None = None,
+        task_timeout: float | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.task_model = task_model or model
         self.timeout = timeout
+        self.task_timeout = task_timeout or timeout
 
     def complete(self, prompt: str) -> LLMResponse:
         headers = {"Content-Type": "application/json"}
@@ -32,7 +34,7 @@ class OpenAICompatProvider(LLMProvider):
                 {"role": "user", "content": prompt},
             ],
         }
-        resp = requests.post(f"{self.base_url}/v1/chat/completions", headers=headers, json=payload, timeout=self.timeout)
+        resp = requests.post(f"{self.base_url}/v1/chat/completions", headers=headers, json=payload, timeout=self.task_timeout)
         resp.raise_for_status()
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
