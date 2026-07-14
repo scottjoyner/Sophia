@@ -32,6 +32,37 @@ def _candidate_threshold(record: Dict[str, object], default_threshold: float) ->
     return float(default_threshold)
 
 
+def _compute_adaptive_threshold(base: float, calibration: Dict[str, object] | None, config: "AppConfig") -> float:
+    if not config.auth.adaptive_threshold_enabled:
+        return float(base)
+    if not calibration:
+        return float(base)
+    accepted_mean = calibration.get("accepted_mean")
+    rejected_mean = calibration.get("rejected_mean")
+    if accepted_mean is None:
+        return float(base)
+    candidate = float(accepted_mean) - config.auth.adaptive_threshold_margin
+    if rejected_mean is not None:
+        candidate = max(candidate, float(rejected_mean) + config.auth.adaptive_threshold_margin)
+    return min(max(candidate, config.auth.adaptive_threshold_min), config.auth.adaptive_threshold_max)
+
+
+def _effective_threshold(
+    record: Dict[str, object],
+    default_threshold: float,
+    config: "AppConfig",
+    registry: "VoiceprintRegistry | None",
+) -> float:
+    base = _candidate_threshold(record, default_threshold)
+    device_id = record.get("device_id")
+    if not device_id or device_id in {"default"}:
+        return base
+    if not config.auth.adaptive_threshold_enabled or registry is None:
+        return base
+    calibration = registry.fetch_device_calibration(str(device_id))
+    return _compute_adaptive_threshold(base, calibration, config)
+
+
 def _build_candidate(record: Dict[str, object], score: float, threshold: float) -> Dict[str, object]:
     return {
         "candidate_id": record.get("candidate_id") or record.get("version_id"),
@@ -74,7 +105,7 @@ def verify_audio_segment(
     active_candidates.sort(key=lambda item: item[0], reverse=True)
     best_active_score = active_candidates[0][0] if active_candidates else 0.0
     best_active_record = active_candidates[0][1] if active_candidates else None
-    active_threshold = _candidate_threshold(best_active_record or {}, config.auth.threshold)
+    active_threshold = _effective_threshold(best_active_record or {}, config.auth.threshold, config, registry)
     active_accepted = best_active_record is not None and best_active_score >= active_threshold
 
     historical_candidates: List[Dict[str, object]] = []
@@ -101,7 +132,7 @@ def verify_audio_segment(
             if score is None:
                 continue
             seen.add(candidate_id)
-            threshold = _candidate_threshold(record, config.auth.threshold)
+            threshold = _effective_threshold(record, config.auth.threshold, config, registry)
             scored = _build_candidate(record, score, threshold)
             scored_candidates.append(scored)
         scored_candidates.sort(key=lambda item: item["score"], reverse=True)
@@ -128,6 +159,26 @@ def verify_audio_segment(
         selected_score = fallback_score
         match_source = "historical_fallback"
 
+    effective_threshold = active_threshold
+    adaptive_calibration = None
+    calibrated_device_id = selected_record.get("device_id")
+    if calibrated_device_id and calibrated_device_id not in {"default"}:
+        adaptive_calibration = registry.fetch_device_calibration(str(calibrated_device_id))
+        effective_threshold = _compute_adaptive_threshold(
+            _candidate_threshold(selected_record or {}, config.auth.threshold),
+            adaptive_calibration,
+            config,
+        )
+        try:
+            registry.record_device_outcome(
+                str(calibrated_device_id),
+                float(selected_score),
+                bool(active_accepted),
+                alpha=config.auth.adaptive_threshold_alpha,
+            )
+        except Exception:
+            pass
+
     return {
         "session_id": session_id,
         "user_id": user_id,
@@ -139,7 +190,10 @@ def verify_audio_segment(
         "fallback_used": fallback_used,
         "fallback_reason": fallback_reason,
         "challenge": challenge_phrase,
-        "device_id": selected_record.get("device_id") if selected_record else None,
+        "device_id": calibrated_device_id,
+        "threshold_used": effective_threshold,
+        "adaptive_threshold": effective_threshold if adaptive_calibration else None,
+        "device_calibration": adaptive_calibration,
         "voiceprint_version_id": selected_record.get("version_id") if selected_record else None,
         "voiceprint_group_key": selected_record.get("group_key") if selected_record else None,
         "voiceprint_scope": selected_record.get("scope") if selected_record else None,

@@ -189,6 +189,10 @@ CONSOLE_PAGE = """<!doctype html>
               <button class="id-btn warn" id="overrideBtn" type="button" title="Rejected? Override to add this clip and retrain the speaker embedding">Override &amp; retrain</button>
               <span id="voiceStatus" class="voice-status">Hold 🎙 to record, then Verify.</span>
             </div>
+            <div class="identity-strip" style="margin-top:10px;">
+              <button class="id-btn" id="backfillBtn" type="button" title="Re-link all enrolled voiceprints into the global Speaker pool">Backfill global speakers</button>
+              <span id="backfillStatus" class="voice-status"></span>
+            </div>
             <div id="voiceHealth"></div>
           </div>
         </section>
@@ -539,6 +543,25 @@ CONSOLE_PAGE = """<!doctype html>
   micBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopVoiceCheck(); });
   verifyBtn.addEventListener('click', () => verifyVoiceCheck(false));
   overrideBtn.addEventListener('click', overrideAndTrain);
+  $('backfillBtn').addEventListener('click', backfillGlobalSpeakers);
+
+  async function backfillGlobalSpeakers() {
+    const btn = $('backfillBtn'); const status = $('backfillStatus');
+    const key = adminKey.value || '';
+    if (!key.trim()) { status.className = 'voice-status bad'; status.textContent = 'Owner override key required to backfill.'; return; }
+    btn.disabled = true; status.className = 'voice-status'; status.textContent = 'Backfilling global speakers…';
+    const form = new FormData();
+    form.append('admin_key', key);
+    try {
+      const r = await api('/voiceprints/backfill-global-speakers', { method: 'POST', body: form });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'backfill failed');
+      status.className = 'voice-status link';
+      status.textContent = 'Backfill done: linked ' + (d.linked || 0) + ', skipped ' + (d.skipped || 0) + ', errors ' + (d.errors || 0) + '.';
+      refreshVoiceHealth();
+    } catch (err) { status.className = 'voice-status bad'; status.textContent = 'Backfill failed: ' + (err.message || err); }
+    finally { btn.disabled = false; }
+  }
 
   async function startVoiceCheck() {
     if (!navigator.mediaDevices || !window.MediaRecorder) { toast('Voice check needs a secure context + mic.'); return; }
@@ -621,7 +644,15 @@ CONSOLE_PAGE = """<!doctype html>
       html += '<div class="health-card"><div class="hc-title">Voiceprint Health</div>';
       if (!users.length) html += '<div class="hc-row">No enrolled speakers yet.</div>';
       users.forEach(u => {
-        html += '<div class="hc-row"><b>' + escapeHtml(u.user_id) + '</b> — ' + (u.sample_count || 0) + ' samples · threshold ' + (u.threshold ?? '?') + (u.devices && u.devices.length ? ' · devices: ' + escapeHtml(u.devices.join(', ')) : '') + '</div>';
+        html += '<div class="hc-row"><b>' + escapeHtml(u.user_id) + '</b> — ' + (u.sample_count || 0) + ' samples · base threshold ' + (u.threshold ?? '?');
+        if (u.devices && u.devices.length) html += ' · devices: ' + escapeHtml(u.devices.join(', '));
+        html += '</div>';
+        const calib = u.device_calibration || {};
+        Object.keys(calib).forEach(dev => {
+          const c = calib[dev];
+          const adaptive = (c.accepted_mean != null) ? (c.accepted_mean - (u.adaptive_threshold_margin ?? 0.05)).toFixed(2) : '-';
+          html += '<div class="link-item">device <b>' + escapeHtml(dev) + '</b> — adaptive threshold ' + adaptive + ' (accepted mean ' + (c.accepted_mean != null ? c.accepted_mean.toFixed(2) : '-') + ', n=' + ((c.n_accepted || 0) + (c.n_rejected || 0)) + ')</div>';
+        });
       });
       html += '</div>';
       const linked = (link.linked_speakers || []);

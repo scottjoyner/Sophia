@@ -27,6 +27,51 @@ class VoiceprintGraphRecord:
     created_at: str | None = None
 
 
+def link_global_speaker_by_label(session, user_id: str, embedding: Sequence[float]) -> Dict[str, Any] | None:
+    """Bridge a VoiceIdentity to a global ``GlobalSpeaker`` node whose display label
+    matches the owner's user_id (case-insensitive). This links the trained owner
+    voiceprint embedding onto the canonical global speaker so diarization/linkage
+    across the fleet can resolve to the same persona.
+
+    Returns the linkage record, or ``None`` when no matching global speaker exists.
+    """
+    try:
+        row = session.run(
+            """
+            MATCH (gs:GlobalSpeaker)
+            WHERE toLower(gs.display_label) = toLower($user_id)
+            RETURN gs.id AS id, gs.display_label AS display_label
+            LIMIT 1
+            """,
+            user_id=user_id,
+        ).single()
+        if not row:
+            return None
+        global_id = row["id"]
+        global_label = row.get("display_label") or user_id
+        session.run(
+            """
+            MERGE (identity:VoiceIdentity {user_id: $user_id})
+            MERGE (gs:GlobalSpeaker {id: $global_id})
+              ON CREATE SET gs.display_label = $display_label, gs.created_at = datetime()
+            SET gs.embedding = $embedding, gs.is_owner_voiceprint = true, gs.updated_at = datetime()
+            MERGE (identity)-[r:IS_GLOBAL_SPEAKER]->(gs)
+            SET r.score = 1.0, r.method = 'label_match', r.linked_at = datetime()
+            """,
+            user_id=user_id,
+            global_id=global_id,
+            display_label=global_label,
+            embedding=list(embedding),
+        )
+        return {
+            "global_speaker_id": global_id,
+            "display_label": global_label,
+            "method": "label_match",
+        }
+    except Exception:
+        return None
+
+
 class VoiceprintGraphStore:
     EMBEDDING_DIMENSION: ClassVar[int] = 192
     _schema_lock: ClassVar[threading.Lock] = threading.Lock()
@@ -503,7 +548,7 @@ class VoiceprintGraphStore:
                     speaker_user_id = str(best_row["speaker_user_id"])
                     session.run(
                         """
-                        MATCH (identity:VoiceIdentity {user_id: $user_id})
+                        MERGE (identity:VoiceIdentity {user_id: $user_id})
                         MERGE (speaker:Speaker {user_id: $speaker_user_id})
                           ON CREATE SET speaker.name = $speaker_user_id, speaker.created_at = datetime()
                         SET speaker.embedding = $embedding, speaker.last_matched_at = datetime()
@@ -515,7 +560,8 @@ class VoiceprintGraphStore:
                         embedding=list(embedding),
                         score=best_score,
                     )
-                    return {
+                    global_link = link_global_speaker_by_label(session, user_id, embedding)
+                    result = {
                         "linked": True,
                         "enabled": True,
                         "created": False,
@@ -523,6 +569,9 @@ class VoiceprintGraphStore:
                         "score": best_score,
                         "method": "embedding_match",
                     }
+                    if global_link:
+                        result["global_speaker"] = global_link
+                    return result
 
                 method = "owner_voiceprint_created"
                 if best_row and str(best_row.get("speaker_user_id")) == str(user_id):
@@ -535,7 +584,7 @@ class VoiceprintGraphStore:
                         speaker.is_owner_voiceprint = true,
                         speaker.updated_at = datetime()
                     WITH speaker
-                    MATCH (identity:VoiceIdentity {user_id: $user_id})
+                    MERGE (identity:VoiceIdentity {user_id: $user_id})
                     MERGE (identity)-[r:IS_SPEAKER]->(speaker)
                     SET r.score = 1.0, r.method = $method, r.linked_at = datetime()
                     """,
@@ -543,7 +592,8 @@ class VoiceprintGraphStore:
                     embedding=list(embedding),
                     method=method,
                 )
-                return {
+                global_link = link_global_speaker_by_label(session, user_id, embedding)
+                result = {
                     "linked": True,
                     "enabled": True,
                     "created": True,
@@ -551,6 +601,9 @@ class VoiceprintGraphStore:
                     "score": 1.0,
                     "method": method,
                 }
+                if global_link:
+                    result["global_speaker"] = global_link
+                return result
         finally:
             driver.close()
 
@@ -566,6 +619,38 @@ class VoiceprintGraphStore:
         ORDER BY r.score DESC
         """
         return [dict(row) for row in self._query_all(query, user_id=user_id)]
+
+    def backfill_global_speaker_embeddings(self, match_threshold: float | None = None) -> Dict[str, Any]:
+        """Re-run global-speaker linking for every enrolled identity.
+
+        Use this to (re)populate the ``speaker_embedding_idx`` and bridge owner
+        voiceprints to global ``Speaker``/``GlobalSpeaker`` nodes after a fresh
+        database, a schema change, or enabling global linkage. Identity-scope
+        voiceprints are linked; device-scope voiceprints are folded into the
+        identity's speaker node automatically during enroll, so we only need the
+        identity embeddings here.
+        """
+        if match_threshold is None:
+            match_threshold = 0.85
+        summary: Dict[str, Any] = {"users": [], "linked": 0, "skipped": 0, "errors": 0}
+        for user_id in self.list_user_ids():
+            try:
+                record = self.get_active_record(user_id)
+                embedding = (record or {}).get("embedding") or []
+                if not embedding:
+                    summary["skipped"] += 1
+                    summary["users"].append({"user_id": user_id, "status": "no_embedding"})
+                    continue
+                linkage = self.link_identity_to_global_speakers(user_id, embedding, match_threshold=match_threshold)
+                if linkage.get("linked"):
+                    summary["linked"] += 1
+                else:
+                    summary["skipped"] += 1
+                summary["users"].append({"user_id": user_id, "status": "ok", "linkage": linkage})
+            except Exception as exc:
+                summary["errors"] += 1
+                summary["users"].append({"user_id": user_id, "status": "error", "error": f"{type(exc).__name__}: {exc}"})
+        return summary
 
     def get_active_records(self, user_id: str) -> List[Dict[str, Any]]:
         query = """

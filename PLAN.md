@@ -289,3 +289,40 @@ protection, feature parity with the legacy UI, and offline resilience.
 - `tests/test_console_overhaul.py`: login flow + cookie, 401 on unauth chat, SSE token/tasks/ingested
   shape, honest `/status` model reporting, graceful `/voiceprints/linkage` without Neo4j, and console +
   legacy homepage render. Full suite: 40 passed, 11 skipped (Neo4j-dependent).
+
+## Phase 13: Longer-Term Voice Hardening — Adaptive Thresholds & Live Global-Speaker Linkage (2026-07-14)
+
+**Goal**: Make voice auth robust across devices and turn the global-speaker linking (previously a
+no-op without a configured graph) into a live, backfillable capability.
+
+### Adaptive per-device threshold
+- New `AuthConfig` fields: `adaptive_threshold_enabled` (true), `adaptive_threshold_min` (0.6),
+  `adaptive_threshold_max` (1.0), `adaptive_threshold_alpha` (0.1, EMA rate), `adaptive_threshold_margin`
+  (0.05). Env overrides: `SOPHIA_ADAPTIVE_THRESHOLD_*`.
+- A `device_calibration` table in the voiceprint SQLite store records an EMA of accepted/rejected match
+  scores per device (`util/db.py`), surfaced via `VoiceprintRegistry.record_device_outcome` /
+  `fetch_device_calibration`.
+- `verify.py` computes an **effective threshold per device**: `clamp(accepted_mean − margin, max(rejected_mean
+  + margin, min), max)`. Genuine accepts on a good mic lower the bar (fewer false rejects); noisy devices
+  tighten it. The chosen threshold and calibration are returned in the verify payload (`threshold_used`,
+  `adaptive_threshold`, `device_calibration`) and shown in the console Voiceprint Health panel.
+- Thresholds recorded after every verify so the system self-calibrates across devices over time.
+
+### Live global-speaker linkage + backfill
+- `VoiceprintGraphStore.link_identity_to_global_speakers` now **MERGEs** the `VoiceIdentity` (works for
+  fresh identities, not just pre-enrolled ones) and writes the trained 192-dim embedding onto the global
+  `Speaker` node, populating `speaker_embedding_idx`.
+- New `link_global_speaker_by_label`: bridges the owner's `VoiceIdentity` to a global `GlobalSpeaker`
+  whose `display_label` matches the user_id (e.g. `scott` → `GlobalSpeaker` "Scott") and writes the
+  embedding there, so fleet diarization/linkage resolves to the same persona. Verified live: a `Speaker`
+  node for `scott` was created with a 192-dim embedding and linked to `GlobalSpeaker` "Scott".
+- New `backfill_global_speaker_embeddings`: re-runs linking for every enrolled identity so the vector
+  index and global bridges stay current after a fresh DB / schema change / enabling linkage.
+- New endpoint `POST /voiceprints/backfill-global-speakers` (owner-key protected) + console
+  "Backfill global speakers" button, and `scripts/backfill_global_speaker_embeddings.py` CLI.
+
+### Tests
+- `tests/test_longer_term_voice.py`: adaptive-threshold math (disabled / no-calibration / lower-for-easy
+  device / floor + rejected-score guard), device-calibration persistence in SQLite, and a Neo4j-gated
+  live test for linking + backfill (skipped when `NEO4J_PASSWORD` is unset).
+- Full suite: 45 passed, 12 skipped (Neo4j-dependent / offline).

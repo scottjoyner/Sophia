@@ -20,6 +20,11 @@ class AuthConfig(BaseModel):
     owner_append_max_seconds: float = 30.0
     global_speaker_link_enabled: bool = True
     global_speaker_link_threshold: float = 0.85
+    adaptive_threshold_enabled: bool = True
+    adaptive_threshold_min: float = 0.6
+    adaptive_threshold_max: float = 1.0
+    adaptive_threshold_alpha: float = 0.1
+    adaptive_threshold_margin: float = 0.05
 
 
 class STTConfig(BaseModel):
@@ -181,6 +186,18 @@ def _apply_env(config: AppConfig) -> AppConfig:
         }
     if os.getenv("SOPHIA_GLOBAL_SPEAKER_LINK_THRESHOLD"):
         auth_update["global_speaker_link_threshold"] = float(os.environ["SOPHIA_GLOBAL_SPEAKER_LINK_THRESHOLD"])
+    if os.getenv("SOPHIA_ADAPTIVE_THRESHOLD_ENABLED"):
+        auth_update["adaptive_threshold_enabled"] = os.environ["SOPHIA_ADAPTIVE_THRESHOLD_ENABLED"].lower() in {
+            "1", "true", "yes", "on",
+        }
+    if os.getenv("SOPHIA_ADAPTIVE_THRESHOLD_MIN"):
+        auth_update["adaptive_threshold_min"] = float(os.environ["SOPHIA_ADAPTIVE_THRESHOLD_MIN"])
+    if os.getenv("SOPHIA_ADAPTIVE_THRESHOLD_MAX"):
+        auth_update["adaptive_threshold_max"] = float(os.environ["SOPHIA_ADAPTIVE_THRESHOLD_MAX"])
+    if os.getenv("SOPHIA_ADAPTIVE_THRESHOLD_ALPHA"):
+        auth_update["adaptive_threshold_alpha"] = float(os.environ["SOPHIA_ADAPTIVE_THRESHOLD_ALPHA"])
+    if os.getenv("SOPHIA_ADAPTIVE_THRESHOLD_MARGIN"):
+        auth_update["adaptive_threshold_margin"] = float(os.environ["SOPHIA_ADAPTIVE_THRESHOLD_MARGIN"])
     if auth_update:
         config.auth = config.auth.model_copy(update=auth_update)
     if config.auth.owner_override_token is None and config.auth.owner_override_token_file:

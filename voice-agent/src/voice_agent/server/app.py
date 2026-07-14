@@ -2353,6 +2353,21 @@ def create_app(config: AppConfig) -> FastAPI:
             raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
         return {"ok": True, "user_id": user_id, "speaker_linkage": linkage}
 
+    @app.post("/voiceprints/backfill-global-speakers")
+    async def voiceprints_backfill_global_speakers(
+        request: Request,
+        admin_key: str = Form(default=""),
+        match_threshold: float = Form(default=0.85),
+    ) -> Dict[str, Any]:
+        _require_owner_override(config, config.auth.owner_user_id, admin_key)
+        registry = _voiceprint_registry()
+        if not registry.graph:
+            raise HTTPException(status_code=400, detail="Neo4j not configured; cannot backfill global speakers.")
+        try:
+            return {"ok": True, **registry.backfill_global_speaker_embeddings(match_threshold=match_threshold)}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+
     @app.post("/voiceprints/train-neo4j")
     async def train_voiceprint_from_neo4j(req: Neo4jEnrollRequest) -> Dict[str, Any]:
         uri = req.neo4j_uri or config.neo4j.uri
@@ -2488,11 +2503,18 @@ def create_app(config: AppConfig) -> FastAPI:
                 base = next((record for record in records if record.get("device_id") == "default"), records[0] if records else None)
                 if not base:
                     continue
+                device_calibration = {}
+                for device_id in devices:
+                    calib = registry.fetch_device_calibration(device_id)
+                    if calib:
+                        device_calibration[device_id] = calib
                 users.append({
                     "user_id": uid,
                     "sample_count": base.get("sample_count", len((base.get("samples") or {}).get("samples") or [])),
                     "threshold": base.get("threshold"),
                     "devices": devices,
+                    "device_calibration": device_calibration,
+                    "adaptive_threshold_enabled": config.auth.adaptive_threshold_enabled,
                     "version_id": base.get("version_id"),
                     "group_key": base.get("group_key"),
                     "scope": base.get("scope"),

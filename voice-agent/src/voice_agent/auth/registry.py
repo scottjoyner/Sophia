@@ -307,3 +307,18 @@ class VoiceprintRegistry:
         cur.execute("DELETE FROM voiceprint_devices WHERE user_id=? AND device_id=?", (user_id, device_id))
         self.db.conn.commit()
         return graph_deleted or cur.rowcount > 0
+
+    def record_device_outcome(self, device_id: str, score: float, accepted: bool, alpha: float = 0.1) -> None:
+        if not device_id:
+            return
+        self.db.record_device_outcome(device_id, float(score), bool(accepted), alpha=alpha)
+
+    def fetch_device_calibration(self, device_id: str) -> Dict[str, Any] | None:
+        if not device_id:
+            return None
+        return self.db.fetch_device_calibration(device_id)
+
+    def backfill_global_speaker_embeddings(self, match_threshold: float | None = None) -> Dict[str, Any]:
+        if not self.graph:
+            return {"ok": False, "error": "Neo4j not configured"}
+        return {"ok": True, **self.graph.backfill_global_speaker_embeddings(match_threshold=match_threshold)}
