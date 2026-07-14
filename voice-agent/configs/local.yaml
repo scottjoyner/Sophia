@@ -1,0 +1,38 @@
+# Local development config for this host.
+# Neo4j is running locally (user: neo4j). Set the password via env:
+#   export NEO4J_PASSWORD=knowledge_graph_2026
+# then run:  voice-agent serve --config configs/local.yaml
+server:
+  host: 0.0.0.0
+  port: 8765
+  protocol: hermes_overlay_v1
+paths:
+  artifacts_dir: runs
+  workspace_dir: workspace
+runtime:
+  max_memory_gb: 8
+  allow_hf_downloads: false
+llm:
+  provider: mock
+  intent_provider: mock
+  intent_model: draft-model
+  system_prompt: "You are Sophia voice overlay for Hermes. Keep outputs short and task-focused."
+stt:
+  refine_enabled: true
+  model_size: tiny
+  compute_type: int8
+  cpu_threads: 2
+vad:
+  aggressiveness: 2
+  energy_threshold: 0.005
+auth:
+  threshold: 0.60
+  require_challenge: false
+  owner_override_enabled: true
+  owner_override_token: change-me-owner-token
+neo4j:
+  uri: bolt://localhost:7687
+  user: neo4j
+  password:
+  database: neo4j
+  default_speaker_name:

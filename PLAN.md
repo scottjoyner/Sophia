@@ -325,4 +325,16 @@ no-op without a configured graph) into a live, backfillable capability.
 - `tests/test_longer_term_voice.py`: adaptive-threshold math (disabled / no-calibration / lower-for-easy
   device / floor + rejected-score guard), device-calibration persistence in SQLite, and a Neo4j-gated
   live test for linking + backfill (skipped when `NEO4J_PASSWORD` is unset).
-- Full suite: 45 passed, 12 skipped (Neo4j-dependent / offline).
+- Full suite: 47 passed, 12 skipped (Neo4j-dependent / offline).
+
+### Deployment fixes (made it actually run)
+- **Database-selection resilience**: `VoiceprintGraphStore._resolve_database` now falls back to an
+  existing database (`neo4j`, then first non-system DB) when the configured one is missing, so the
+  voiceprint graph works without manual tuning. The deployment's `NEO4J_DATABASE` was switched from the
+  empty `assistx` DB to `neo4j`, where the speaker data (`GlobalSpeaker` "Scott", `scott`'s
+  `VoiceIdentity`) actually lives — required for global-speaker linkage to resolve.
+- **Neo4j temporal serialization bug**: `/voiceprints/linkage` and `/voiceprints/status` returned HTTP 500
+  because `neo4j.time.DateTime` (`linked_at`/`created_at`) is not JSON-serializable. Added `_neo4j_json`
+  / `_jsonable` converters so graph results are safe to return (verified: no more 500s).
+- Added `configs/local.yaml` (points at `bolt://localhost:7687`, DB `neo4j`) for quick local runs, and
+  rebuilt/restarted the `sophia-voice` container so the new console + live linkage are deployed on :8765.

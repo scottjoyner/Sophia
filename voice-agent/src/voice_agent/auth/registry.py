@@ -9,6 +9,18 @@ from ..util.db import Database
 from .voiceprint_graph import VoiceprintGraphStore
 
 
+def _jsonable(value: object) -> object:
+    """Best-effort JSON-safe conversion for values coming from the graph store."""
+    if value is None or isinstance(value, (str, int, float, bool, list, dict)):
+        return value
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
+    return str(value)
+
+
 class VoiceprintRegistry:
     def __init__(self, db_path: Path, config: AppConfig | None = None):
         self.db = Database(db_path)
@@ -68,7 +80,7 @@ class VoiceprintRegistry:
             "append": bool(record.get("append")),
             "lineage_mode": record.get("lineage_mode"),
             "active": bool(record.get("active", True)),
-            "created_at": record.get("created_at"),
+            "created_at": _jsonable(record.get("created_at")),
         }
 
     @staticmethod
@@ -108,7 +120,7 @@ class VoiceprintRegistry:
             "append": bool(record.get("append")),
             "lineage_mode": record.get("lineage_mode"),
             "active": bool(record.get("active", True)),
-            "created_at": record.get("created_at"),
+            "created_at": _jsonable(record.get("created_at")),
         }
         return normalized
 

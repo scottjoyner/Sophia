@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from voice_agent.auth.verify import _compute_adaptive_threshold
+from voice_agent.auth.registry import _jsonable
+from voice_agent.auth.voiceprint_graph import _neo4j_json
 from voice_agent.config import AppConfig, PathsConfig
 
 
@@ -94,3 +96,23 @@ def test_global_speaker_linking_live(tmp_path: Path):
     assert store.get_identity_linkage(user)
     backfill = store.backfill_global_speaker_embeddings()
     assert backfill["errors"] == 0
+
+
+class _FakeDateTime:
+    """Duck-typed stand-in for neo4j.time.DateTime used by the stores."""
+
+    def isoformat(self) -> str:
+        return "2026-07-14T00:00:00+00:00"
+
+
+def test_neo4j_json_makes_temporal_values_serializable():
+    assert _neo4j_json(None) is None
+    assert _neo4j_json("x") == "x"
+    assert _neo4j_json(1.5) == 1.5
+    assert _neo4j_json(_FakeDateTime()) == "2026-07-14T00:00:00+00:00"
+
+
+def test_registry_jsonable_converts_temporal_values():
+    assert _jsonable(_FakeDateTime()) == "2026-07-14T00:00:00+00:00"
+    assert _jsonable("plain") == "plain"
+    assert _jsonable(3) == 3

@@ -27,6 +27,25 @@ class VoiceprintGraphRecord:
     created_at: str | None = None
 
 
+def _neo4j_json(value: object) -> object:
+    """Make Neo4j temporal types JSON-serializable for FastAPI responses."""
+    if value is None or isinstance(value, (str, int, float, bool, list, dict)):
+        return value
+    try:
+        from neo4j.time import Date, DateTime, Time
+
+        if isinstance(value, (DateTime, Date, Time)):
+            return value.isoformat()
+    except Exception:
+        pass
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
+    return value
+
+
 def link_global_speaker_by_label(session, user_id: str, embedding: Sequence[float]) -> Dict[str, Any] | None:
     """Bridge a VoiceIdentity to a global ``GlobalSpeaker`` node whose display label
     matches the owner's user_id (case-insensitive). This links the trained owner
@@ -81,9 +100,37 @@ class VoiceprintGraphStore:
         self.uri = uri
         self.user = user
         self.password = password
-        self.database = database
+        self.database = self._resolve_database(uri, user, password, database)
         self.schema_error: str | None = None
         self.ensure_schema()
+
+    @staticmethod
+    def _resolve_database(uri: str, user: str, password: str, database: str | None) -> str | None:
+        """Pick a database that actually exists.
+
+        The configured database (often the legacy default ``memory``) may not exist
+        on a given deployment. Fall back to ``neo4j`` or the first non-system user
+        database so the voiceprint graph works without manual tuning.
+        """
+        try:
+            from neo4j import GraphDatabase
+
+            driver = GraphDatabase.driver(uri, auth=(user, password))
+            try:
+                with driver.session() as session:
+                    names = [row["name"] for row in session.run("SHOW DATABASES YIELD name")]
+                if database in names:
+                    return database
+                if "neo4j" in names:
+                    return "neo4j"
+                user_dbs = [name for name in names if name not in {"system"}]
+                if user_dbs:
+                    return user_dbs[0]
+            finally:
+                driver.close()
+        except Exception:
+            pass
+        return database
 
     @classmethod
     def from_config(cls, config: Neo4jConfig | None) -> VoiceprintGraphStore | None:
@@ -618,7 +665,10 @@ class VoiceprintGraphStore:
                r.linked_at AS linked_at
         ORDER BY r.score DESC
         """
-        return [dict(row) for row in self._query_all(query, user_id=user_id)]
+        return [
+            {**dict(row), "linked_at": _neo4j_json(row.get("linked_at"))}
+            for row in self._query_all(query, user_id=user_id)
+        ]
 
     def backfill_global_speaker_embeddings(self, match_threshold: float | None = None) -> Dict[str, Any]:
         """Re-run global-speaker linking for every enrolled identity.
@@ -677,6 +727,7 @@ class VoiceprintGraphStore:
         records = self._query_all(query, user_id=user_id)
         for record in records:
             record["user_id"] = user_id
+            record["created_at"] = _neo4j_json(record.get("created_at"))
         return records
 
     def get_historical_candidates(self, user_id: str) -> List[Dict[str, Any]]:
