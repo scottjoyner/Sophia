@@ -32,9 +32,9 @@ def test_dispatch_to_assistx_uses_env_base_and_secret(monkeypatch, tmp_path):
     client = _app(monkeypatch, tmp_path)
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr("voice_agent.server.app.ASSISTX_VOICE_WEBHOOK_BASE_URL", "http://assistant.local:8000")
-    monkeypatch.setattr("voice_agent.server.app.ASSISTX_VOICE_WEBHOOK_BASE_URL_CONFIGURED", True)
-    monkeypatch.setattr("voice_agent.server.app.ASSISTX_VOICE_WEBHOOK_SECRET", "env-secret-123")
+    monkeypatch.setattr("voice_agent.server.assistx_dispatch.ASSISTX_VOICE_WEBHOOK_BASE_URL", "http://assistant.local:8000")
+    monkeypatch.setattr("voice_agent.server.assistx_dispatch.ASSISTX_VOICE_WEBHOOK_BASE_URL_CONFIGURED", True)
+    monkeypatch.setattr("voice_agent.server.assistx_dispatch.ASSISTX_VOICE_WEBHOOK_SECRET", "env-secret-123")
 
     def fake_post(url, content=None, headers=None, timeout=None):
         captured["url"] = url
@@ -76,8 +76,8 @@ def test_dispatch_to_assistx_uses_env_base_and_secret(monkeypatch, tmp_path):
 
 def test_dispatch_status_uses_env_base(monkeypatch, tmp_path):
     client = _app(monkeypatch, tmp_path)
-    monkeypatch.setattr("voice_agent.server.app.ASSISTX_VOICE_WEBHOOK_BASE_URL", "http://assistant.local:8000")
-    monkeypatch.setattr("voice_agent.server.app.ASSISTX_VOICE_WEBHOOK_BASE_URL_CONFIGURED", True)
+    monkeypatch.setattr("voice_agent.server.assistx_dispatch.ASSISTX_VOICE_WEBHOOK_BASE_URL", "http://assistant.local:8000")
+    monkeypatch.setattr("voice_agent.server.assistx_dispatch.ASSISTX_VOICE_WEBHOOK_BASE_URL_CONFIGURED", True)
 
     def fake_post(url, content=None, headers=None, timeout=None):
         assert url == "http://assistant.local:8000/api/voice/events"

@@ -174,3 +174,63 @@
 - **Voice data**: `/data/voice-insight/` (fingerprints, training clips, reference)
 - **SSD staging**: `/mnt/S/sophia-ingest/` (NAS audio staged for processing)
 - **Neo4j**: `bolt://host.docker.internal:7687` (memory database)
+
+---
+
+## Phase 11: Console Overhaul (UI/UX + Auth + Realtime AssistX) ✅
+
+**Goal**: An intuitive, robust console that gates access, streams realtime answers from the
+AssistX auto-router (small model), and automatically turns requests into tasks ingested into AssistX.
+
+### Authentication logic
+- A signed session gate replaces the open page. `POST /auth/login` validates a passphrase
+  (`SOPHIA_APP_PASSWORD`, falls back to `SOPHIA_OWNER_OVERRIDE_TOKEN`) and issues an HMAC-signed,
+  httpOnly, `SameSite=Strict` session cookie (`sophia_session`, 12h TTL).
+- `GET /auth/session` reports auth state; `POST /auth/logout` clears the cookie.
+- `require_session` (in `auth_session.py`) protects `/api/chat/stream`; unauthenticated calls get 401.
+- The console shell checks `/auth/session` on load and shows a login card when unauthenticated.
+- Voice identity remains available as an in-console "voice check" (mic → `POST /auth/verify`)
+  surfacing the match score — layered on top of the session gate, not instead of it.
+
+### Realtime responses from the AssistX auto-router
+- `Assistant` (`server/assistant.py`) selects the LLM provider: the configured intent/auto-router
+  endpoint (`SOPHIA_INTENT_BASE_URL` + `SOPHIA_INTENT_MODEL`, a small model is sufficient) when set,
+  else the main provider, else a `MockProvider`.
+- `OpenAICompatProvider.stream_complete` does OpenAI-compatible SSE (`stream:true`) token streaming.
+- `POST /api/chat/stream` returns `text/event-stream` SSE. Events:
+  `token` (realtime text delta), `tasks` (extracted task list), `ingested` (AssistX dispatch results),
+  `error`, `done`. The UI renders tokens live with a typing caret.
+
+### Automatic task assignment + AssistX ingestion
+- After each reply, the small model extracts a JSON task list from the conversation
+  (`Assistant.extract_tasks`) — title, description, priority, due, assignee.
+- Each task is wrapped as a `task_created` event via `build_voice_event` and posted to AssistX
+  (`dispatch_to_assistx`, HMAC/Basic-auth signed) — `Assistant.ingest_tasks`.
+- The console "Task Inbox → AssistX" panel shows each task's lifecycle: `extracted → ingested ✓`
+  (with AssistX `task_id`) or `failed` (with reason). No manual dispatch button required.
+
+### Robustness
+- Graceful degradation: with no LLM configured the assistant streams a mock; with no AssistX secret
+  configured, ingestion reports the honest `failed` state rather than silently dropping tasks.
+- Error toasts, disabled-send-while-streaming, Enter-to-send, auto-scroll, mobile-responsive layout,
+  and a collapsible task inbox on small screens.
+- All AssistX signing/dispatch logic is centralized in `server/assistx_dispatch.py` and reused by both
+  the legacy `/dispatch/to-assistx` route and the new assistant.
+
+### New endpoints & files
+| Route | Purpose |
+|-------|---------|
+| `GET /` | New console SPA (login gate + streaming chat + task inbox) |
+| `GET /legacy` | Previous capture/meeting/dispatch UI |
+| `GET /auth/session` | Auth state |
+| `POST /auth/login` | Passphrase → session cookie |
+| `POST /auth/logout` | Clear session |
+| `POST /api/chat/stream` | SSE realtime assistant + auto task ingestion |
+
+| File | Purpose |
+|------|---------|
+| `server/console_ui.py` | `CONSOLE_PAGE` SPA template |
+| `server/auth_session.py` | Signed session token + `require_session` |
+| `server/assistx_dispatch.py` | Shared AssistX event builder + signed HTTP dispatch |
+| `server/assistant.py` | Realtime reply, task extraction, AssistX ingestion |
+| `llm/openai_compat_provider.py` | Added `stream_complete` (SSE) |

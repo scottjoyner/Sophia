@@ -5,12 +5,11 @@ import hmac
 import json
 import os
 import uuid
-from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..auth.enroll import EnrollmentError, enroll_from_files
@@ -25,32 +24,26 @@ from ..llm.openai_compat_provider import OpenAICompatProvider
 from ..stt.faster_whisper_batch import refine_transcript
 from ..util.audio import b64decode, read_wav
 from ..util.time import now_ms
+from .assistx_dispatch import (
+    ASSISTX_VOICE_WEBHOOK_BASE_URL,
+    ASSISTX_VOICE_WEBHOOK_SECRET,
+    assistx_base_url as _assistx_voice_base_url,
+    assistx_webhook_url as _assistx_voice_webhook_url,
+    build_voice_event,
+    dispatch_to_assistx,
+)
+from .assistant import Assistant
+from .auth_session import (
+    SESSION_COOKIE,
+    SESSION_TTL_SECONDS,
+    login as auth_login_check,
+    require_session,
+    verify_session_token,
+)
+from .console_ui import CONSOLE_PAGE
 from .events import EventBus, event_to_dict
 from .protocols import build_protocol_adapter
 from .session_manager import SessionManager
-
-
-ASSISTX_VOICE_WEBHOOK_BASE_URL = os.getenv("ASSISTX_VOICE_WEBHOOK_BASE_URL", "http://host.docker.internal:8000").rstrip("/")
-ASSISTX_VOICE_WEBHOOK_BASE_URL_CONFIGURED = "ASSISTX_VOICE_WEBHOOK_BASE_URL" in os.environ
-ASSISTX_VOICE_WEBHOOK_SECRET = (
-    os.getenv("ASSISTX_VOICE_WEBHOOK_SECRET")
-    or os.getenv("VOICE_WEBHOOK_SECRET")
-    or ""
-).strip()
-ASSISTX_VOICE_WEBHOOK_SECRET_CONFIGURED = bool(os.getenv("ASSISTX_VOICE_WEBHOOK_SECRET") or os.getenv("VOICE_WEBHOOK_SECRET"))
-
-
-def _assistx_voice_base_url(raw: str | None = None) -> str:
-    candidate = (
-        ASSISTX_VOICE_WEBHOOK_BASE_URL if ASSISTX_VOICE_WEBHOOK_BASE_URL_CONFIGURED else raw or ASSISTX_VOICE_WEBHOOK_BASE_URL or ""
-    ).strip().rstrip("/")
-    if candidate.endswith("/api/voice/events"):
-        candidate = candidate[: -len("/api/voice/events")].rstrip("/")
-    return candidate or "http://host.docker.internal:8000"
-
-
-def _assistx_voice_webhook_url(raw: str | None = None) -> str:
-    return f"{_assistx_voice_base_url(raw)}/api/voice/events"
 
 
 class IntentRequest(BaseModel):
@@ -82,6 +75,16 @@ class DispatchRequest(BaseModel):
     target_url: str = ASSISTX_VOICE_WEBHOOK_BASE_URL
     target_token: str = ""
     session_id: str | None = "mobile"
+
+
+class AuthLoginRequest(BaseModel):
+    passphrase: str
+
+
+class ChatRequest(BaseModel):
+    messages: List[Dict[str, str]] = []
+    session_id: str = "console"
+    context: Dict[str, Any] = {}
 
 
 CAPTURE_PAGE = """<!doctype html>
@@ -1743,6 +1746,7 @@ def create_app(config: AppConfig) -> FastAPI:
     app.state.manager = manager
     app.state.events = bus
     app.state.meeting_tasks = meeting_tasks
+    app.state.assistant = Assistant(config)
     intent_provider = None
     if config.llm.intent_provider in {"openai", "hermes"} and config.llm.intent_base_url:
         intent_provider = OpenAICompatProvider(
@@ -1876,11 +1880,87 @@ def create_app(config: AppConfig) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     async def homepage() -> HTMLResponse:
         return HTMLResponse(
+            CONSOLE_PAGE,
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+            },
+        )
+
+    @app.get("/legacy", response_class=HTMLResponse)
+    async def legacy_homepage() -> HTMLResponse:
+        return HTMLResponse(
             CAPTURE_PAGE,
             headers={
                 "Cache-Control": "no-store, max-age=0",
                 "Pragma": "no-cache",
             },
+        )
+
+    @app.get("/auth/session")
+    async def auth_session(request: Request) -> Dict[str, Any]:
+        token = request.cookies.get(SESSION_COOKIE)
+        authed = verify_session_token(token)
+        return {
+            "authenticated": authed,
+            "user_id": config.auth.owner_user_id if authed else None,
+        }
+
+    @app.post("/auth/login")
+    async def auth_login(request: Request, req: AuthLoginRequest) -> Response:
+        token = auth_login_check(req.passphrase)
+        if not token:
+            raise HTTPException(status_code=401, detail="Invalid passphrase")
+        user_id = config.auth.owner_user_id
+        resp = JSONResponse({"ok": True, "authenticated": True, "user_id": user_id})
+        resp.set_cookie(
+            SESSION_COOKIE,
+            token,
+            httponly=True,
+            samesite="strict",
+            max_age=SESSION_TTL_SECONDS,
+            secure=request.url.scheme == "https",
+        )
+        return resp
+
+    @app.post("/auth/logout")
+    async def auth_logout() -> Response:
+        resp = JSONResponse({"ok": True, "authenticated": False})
+        resp.delete_cookie(SESSION_COOKIE)
+        return resp
+
+    @app.post("/api/chat/stream")
+    async def chat_stream(request: Request, payload: ChatRequest):
+        require_session(request)
+        assistant = request.app.state.assistant
+        messages = payload.messages or [{"role": "user", "content": "hello"}]
+        user_id = config.auth.owner_user_id
+
+        def event_gen():
+            full: list = []
+            try:
+                for delta in assistant.stream_reply(messages):
+                    full.append(delta)
+                    yield "data: " + json.dumps({"type": "token", "text": delta}) + "\n\n"
+                reply = "".join(full)
+                conversation = "\n".join(f"{m['role']}: {m['content']}" for m in messages if m.get("role") in {"user", "assistant"})
+                tasks = assistant.extract_tasks(conversation)
+                if tasks:
+                    yield "data: " + json.dumps({"type": "tasks", "tasks": tasks}) + "\n\n"
+                    results = assistant.ingest_tasks(
+                        tasks,
+                        session_id=payload.session_id or "console",
+                        actor={"user_id": user_id, "device_id": None},
+                    )
+                    yield "data: " + json.dumps({"type": "ingested", "results": results}) + "\n\n"
+                yield "data: " + json.dumps({"type": "done"}) + "\n\n"
+            except Exception as exc:
+                yield "data: " + json.dumps({"type": "error", "error": f"{type(exc).__name__}: {exc}"}) + "\n\n"
+
+        return StreamingResponse(
+            event_gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     @app.get("/healthz")
@@ -2020,6 +2100,7 @@ def create_app(config: AppConfig) -> FastAPI:
             "confidence": detected.confidence,
             "source": detected.source,
             "transcript": detected.transcript,
+            "hermes_prompt": detected.hermes_prompt,
         }
 
     @app.post("/voice-chat")
@@ -2408,74 +2489,22 @@ def create_app(config: AppConfig) -> FastAPI:
         }
 
     @app.post("/dispatch/to-assistx")
-    async def dispatch_to_assistx(req: DispatchRequest) -> Dict[str, Any]:
-        import httpx, time, hmac, hashlib
-
-        webhook_url = _assistx_voice_webhook_url(req.target_url)
-        token = ASSISTX_VOICE_WEBHOOK_SECRET or req.target_token.strip()
-        event_id = uuid.uuid4().hex
-        correlation_id = uuid.uuid4().hex
-        dispatch_id = uuid.uuid4().hex
+    async def dispatch_to_assistx_route(req: DispatchRequest) -> Dict[str, Any]:
         metadata = req.metadata if req.metadata and any(k for k in req.metadata if req.metadata[k]) else None
-        ts = str(time.time())
-        payload = OrderedDict()
-        payload["event_id"] = event_id
-        payload["event_type"] = req.event_type
-        if req.text:
-            payload["text"] = req.text
-        payload["source"] = "sophia_voice"
-        payload["schema_version"] = "2026-06-08.v1"
-        payload["correlation_id"] = correlation_id
-        if req.session_id:
-            payload["session_id"] = req.session_id
-        payload["client_ts"] = ts
-        if metadata is not None:
-            payload["metadata"] = metadata
-        payload["actor"] = {
+        actor = {
             "user_id": (metadata or {}).get("user_id", "scott"),
             "device_id": (metadata or {}).get("device_id"),
             "auth_state": (metadata or {}).get("auth_state", "accepted" if (metadata or {}).get("accepted") else "not_required"),
         }
-        payload["links"] = {
-            "correlation_id": correlation_id,
-            "dispatch_id": dispatch_id,
-            "task_id": None,
-            "route_id": None,
-            "assignment_id": None,
-        }
-        payload["auto_dispatch"] = req.auto_dispatch
-        body_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        headers = {"Content-Type": "application/json"}
-        result = {"event_id": event_id, "sent": False, "error": None, "response": None, "correlation_id": correlation_id}
-        if not token:
-            result["error"] = "Voice webhook secret not configured"
-            dispatch_history.append({**result, "event_type": req.event_type, "ts_ms": now_ms()})
-            if len(dispatch_history) > 100:
-                dispatch_history[:] = dispatch_history[-100:]
-            return result
-        auth_user = os.getenv("ASSISTX_BASIC_AUTH_USER", "")
-        auth_pass = os.getenv("ASSISTX_BASIC_AUTH_PASS", "")
-        if auth_user and auth_pass:
-            import base64
-            creds = base64.b64encode(f"{auth_user}:{auth_pass}".encode()).decode()
-            headers["Authorization"] = f"Basic {creds}"
-        else:
-            sig = hmac.new(token.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
-            headers["X-Voice-Signature"] = f"sha256={sig}"
-        try:
-            r = httpx.post(webhook_url, content=body_bytes, headers=headers, timeout=10)
-            result["sent"] = r.status_code == 200
-            if r.status_code == 200:
-                resp_data = r.json()
-                result["response"] = resp_data
-                result["correlation_id"] = resp_data.get("correlation_id", correlation_id)
-                result["task_id"] = resp_data.get("task_id")
-                result["dispatch_id"] = resp_data.get("dispatch_id")
-                result["intent_id"] = resp_data.get("intent_id")
-            else:
-                result["error"] = f"HTTP {r.status_code}: {r.text[:300]}"
-        except Exception as exc:
-            result["error"] = f"{type(exc).__name__}: {exc}"
+        payload = build_voice_event(
+            req.event_type,
+            req.text,
+            metadata,
+            session_id=req.session_id,
+            auto_dispatch=req.auto_dispatch,
+            actor=actor,
+        )
+        result = dispatch_to_assistx(payload, target_url=req.target_url, token=req.target_token)
         dispatch_history.append({**result, "event_type": req.event_type, "ts_ms": now_ms()})
         if len(dispatch_history) > 100:
             dispatch_history[:] = dispatch_history[-100:]
