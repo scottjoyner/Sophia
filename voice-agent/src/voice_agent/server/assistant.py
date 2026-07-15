@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 from ..config import AppConfig
-from ..llm.openai_compat_provider import OpenAICompatProvider
+from ..llm.openai_compat_provider import LLMProviderError, OpenAICompatProvider
 from ..llm.provider_base import LLMProvider, MockProvider
 from .assistx_dispatch import build_voice_event, dispatch_to_assistx
+
+logger = logging.getLogger(__name__)
 
 
 TASK_EXTRACTION_PROMPT = (
@@ -29,6 +33,68 @@ class Assistant:
     def __init__(self, config: AppConfig):
         self.config = config
         self.provider = self._build_provider()
+        self.discoverer = None
+        self._provider_cache: Dict[str, LLMProvider] = {}
+        if getattr(config.llm, "fleet_discovery", False):
+            self._init_fleet()
+
+    def _init_fleet(self) -> None:
+        try:
+            from ..llm.model_discovery import ModelDiscoverer
+
+            llm = self.config.llm
+            nodes = [n.strip() for n in (llm.fleet_candidate_nodes or "").split(",") if n.strip()]
+            self.discoverer = ModelDiscoverer(
+                node_port=llm.fleet_node_port,
+                router_models_url=llm.fleet_router_url,
+                candidate_nodes=nodes or None,
+                refresh_interval=llm.fleet_refresh_interval,
+                chat_max_params=llm.fleet_chat_max_params,
+                task_min_params=llm.fleet_task_min_params,
+            )
+            self.discoverer.start()
+        except Exception as exc:  # discovery is best-effort; fall back to config provider
+            import logging
+
+            logging.getLogger(__name__).warning("fleet discovery failed to start: %s", exc)
+            self.discoverer = None
+
+    def _provider_for(self, ep) -> Optional[LLMProvider]:
+        if ep is None:
+            return None
+        key = ep.full_id
+        cached = self._provider_cache.get(key)
+        if cached is None:
+            cached = OpenAICompatProvider(
+                ep.base_url,
+                None,
+                ep.model_id,
+                timeout=self.config.llm.timeout,
+                task_timeout=self.config.llm.task_timeout,
+            )
+            self._provider_cache[key] = cached
+        return cached
+
+    def _candidate_endpoints(self, kind: str):
+        """Ordered fleet endpoints to try for a workload, best first.
+
+        Chat-suited models (small/fast, idle-preferring) or task-suited models
+        (large, idle-preferring) are returned so a single stale/unloaded model
+        never breaks the chat — the caller retries the next candidate. Returns
+        ``None`` when discovery is disabled (use the configured provider)."""
+        if not self.discoverer:
+            return None
+        eps = [e for e in self.discoverer.endpoints() if not e.is_embedding]
+        if not eps:
+            return None
+        now = time.time()
+        if kind == "chat":
+            cands = [e for e in eps if e.params <= self.discoverer.chat_max_params] or eps
+            cands.sort(key=lambda e: (self.discoverer._idle_score(e, now), -e.params), reverse=True)
+        else:
+            cands = [e for e in eps if e.params >= self.discoverer.task_min_params] or eps
+            cands.sort(key=lambda e: (e.params, self.discoverer._idle_score(e, now)), reverse=True)
+        return cands
 
     def _build_provider(self) -> LLMProvider:
         llm = self.config.llm
@@ -62,22 +128,97 @@ class Assistant:
             return self.provider.model
         return "mock"
 
-    def stream_reply(self, messages: List[Dict[str, str]]) -> Iterator[str]:
-        gen = self.provider.stream_complete(messages)
-        if isinstance(gen, str):
-            yield gen
-            return
-        yield from gen
+    def _format_context(self, context: Optional[Dict[str, Any]]) -> str:
+        if not context:
+            return ""
+        parts: List[str] = []
+        loc = context.get("location") or {}
+        if loc.get("lat") is not None:
+            s = f"User location: {loc.get('lat')}, {loc.get('lng')}"
+            if loc.get("accuracy_m") is not None:
+                s += f" (±{loc.get('accuracy_m')} m)"
+            parts.append(s)
+        if context.get("platform"):
+            parts.append(f"Device platform: {context.get('platform')}")
+        if context.get("device_id"):
+            parts.append(f"Device: {context.get('device_id')}")
+        if context.get("timezone"):
+            parts.append(f"Timezone: {context.get('timezone')}")
+        if context.get("activity"):
+            parts.append(f"Activity: {context.get('activity')}")
+        if context.get("note"):
+            parts.append(str(context.get("note")))
+        return "\n".join(parts)
 
-    def extract_tasks(self, conversation: str) -> List[Dict[str, Any]]:
+    def _prepare_messages(self, messages: List[Dict[str, Any]], context: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        msgs: List[Dict[str, Any]] = [dict(m) for m in messages]
+        ctx_str = self._format_context(context)
+        if ctx_str:
+            msgs.insert(0, {
+                "role": "system",
+                "content": (
+                    "The following is live context about the user and their environment. "
+                    "Use it when relevant to the request; ignore it otherwise:\n" + ctx_str
+                ),
+            })
+        # Forward-looking: if the client attaches images, render them as
+        # multimodal content parts on the first user turn so a future vision
+        # model can consume them. Current small chat models will simply ignore
+        # or skip them.
+        images = (context or {}).get("images") if isinstance(context, dict) else None
+        if images:
+            for m in msgs:
+                if m.get("role") == "user":
+                    text = m.get("content", "") if isinstance(m.get("content"), str) else ""
+                    content: List[Dict[str, Any]] = [{"type": "text", "text": text}]
+                    for img in images:
+                        url = img.get("url")
+                        if not url and img.get("data"):
+                            url = "data:" + img.get("media_type", "image/png") + ";base64," + img["data"]
+                        if url:
+                            content.append({"type": "image_url", "image_url": {"url": url}})
+                    m["content"] = content
+                    break
+        return msgs
+
+    def stream_reply(self, messages: List[Dict[str, Any]], context: Optional[Dict[str, Any]] = None) -> Iterator[str]:
+        msgs = self._prepare_messages(messages, context)
+        eps = self._candidate_endpoints("chat")
+        if not eps:
+            try:
+                yield from self.provider.stream_complete(msgs)
+                return
+            except Exception as exc:
+                logger.warning("configured chat provider failed: %s", exc)
+                raise
+        for ep in eps:
+            provider = self._provider_for(ep) or self.provider
+            try:
+                for delta in provider.stream_complete(msgs):
+                    yield delta
+                self.discoverer._mark_used(ep)
+                return
+            except Exception as exc:
+                logger.warning("chat candidate %s failed: %s; trying next", ep.full_id, exc)
+                continue
+        raise LLMProviderError("all chat endpoints failed")
+
+    def extract_tasks(self, conversation: str, context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         if not conversation.strip():
             return []
         prompt = TASK_EXTRACTION_PROMPT.replace("{conversation}", conversation)
-        try:
-            raw = self.provider.complete(prompt).content
-        except Exception:
-            return []
-        return _parse_task_list(raw)
+        eps = self._candidate_endpoints("task")
+        providers = [self._provider_for(ep) or self.provider for ep in eps] if eps else [self.provider]
+        for i, provider in enumerate(providers):
+            try:
+                raw = provider.complete(prompt).content
+                if eps:
+                    self.discoverer._mark_used(eps[i])
+                return _parse_task_list(raw)
+            except Exception as exc:
+                logger.warning("task candidate failed: %s; trying next", exc)
+                continue
+        return []
 
     def ingest_tasks(
         self,

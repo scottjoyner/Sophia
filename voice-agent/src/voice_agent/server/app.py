@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import hmac
 import json
 import os
@@ -9,11 +10,15 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..auth.enroll import EnrollmentError, enroll_from_files
-from ..auth.neo4j_ingest import collect_audio_paths_from_neo4j, save_capture_to_neo4j
+from ..auth.neo4j_ingest import (
+    collect_audio_paths_from_neo4j,
+    list_recent_captures,
+    save_capture_to_neo4j,
+)
 from ..auth.diarization import diarize, identify_speakers
 from ..auth.verify import verify_audio_segment
 from ..auth.registry import VoiceprintRegistry
@@ -42,10 +47,12 @@ from .auth_session import (
     require_session,
     verify_session_token,
 )
-from .console_ui import CONSOLE_PAGE
+from .templates_loader import load_template, is_mobile_user_agent
 from .events import EventBus, event_to_dict
 from .protocols import build_protocol_adapter
 from .session_manager import SessionManager
+
+logger = logging.getLogger(__name__)
 
 
 class IntentRequest(BaseModel):
@@ -84,7 +91,7 @@ class AuthLoginRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    messages: List[Dict[str, str]] = []
+    messages: List[Dict[str, Any]] = []
     session_id: str = "console"
     context: Dict[str, Any] = {}
 
@@ -1921,13 +1928,30 @@ def create_app(config: AppConfig) -> FastAPI:
         }
 
     @app.get("/", response_class=HTMLResponse)
-    async def homepage() -> HTMLResponse:
+    async def homepage(request: Request) -> HTMLResponse:
+        # Auto-detect device class: phones/tablets get the voice-first mobile app,
+        # everything else gets the full desktop console. Explicit /desktop and /m
+        # routes below let the user override the choice.
+        if is_mobile_user_agent(request.headers.get("user-agent")):
+            return RedirectResponse("/m", status_code=302)
         return HTMLResponse(
-            CONSOLE_PAGE,
-            headers={
-                "Cache-Control": "no-store, max-age=0",
-                "Pragma": "no-cache",
-            },
+            load_template("desktop.html"),
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
+
+    @app.get("/desktop", response_class=HTMLResponse)
+    async def desktop_homepage() -> HTMLResponse:
+        return HTMLResponse(
+            load_template("desktop.html"),
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
+
+    @app.get("/m", response_class=HTMLResponse)
+    @app.get("/mobile", response_class=HTMLResponse)
+    async def mobile_homepage() -> HTMLResponse:
+        return HTMLResponse(
+            load_template("mobile.html"),
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
         )
 
     @app.get("/legacy", response_class=HTMLResponse)
@@ -2032,7 +2056,7 @@ def create_app(config: AppConfig) -> FastAPI:
         def event_gen():
             full: list = []
             try:
-                for delta in assistant.stream_reply(messages):
+                for delta in assistant.stream_reply(messages, context=payload.context):
                     full.append(delta)
                     yield "data: " + json.dumps({"type": "token", "text": delta}) + "\n\n"
             except Exception as exc:
@@ -2079,6 +2103,8 @@ def create_app(config: AppConfig) -> FastAPI:
                 "intent_draft_enabled": bool(intent_provider),
                 "assistant_configured": app.state.assistant.configured,
                 "assistant_model": app.state.assistant.model_label,
+                "fleet_discovery": app.state.assistant.discoverer is not None,
+                "fleet": app.state.assistant.discoverer.snapshot() if app.state.assistant.discoverer else None,
             },
             "tts": {"backend": config.tts.backend},
             "memory_graph": _neo4j_write_status(),
@@ -2246,6 +2272,18 @@ def create_app(config: AppConfig) -> FastAPI:
             audio_path = str(audio_file)
             byte_count = len(data)
         transcript_text = " ".join(transcript.strip().split())
+        transcribed_via = None
+        if not transcript_text and audio is not None and audio_path:
+            try:
+                wav_path = _ensure_wav_for_processing(Path(audio_path))
+                samples, sr = read_wav(str(wav_path))
+                text = await asyncio.to_thread(refine_transcript, samples, sr, config.stt)
+                text = " ".join((text or "").strip().split())
+                if text and text.lower() != "hello world":
+                    transcript_text = text
+                    transcribed_via = "faster_whisper"
+            except Exception as exc:  # transcription is best-effort; never block the capture
+                logger.warning("capture transcription skipped: %s", exc)
         detected = _detect_intent(transcript_text) if transcript_text else None
         context = _capture_context(
             request,
@@ -2293,6 +2331,7 @@ def create_app(config: AppConfig) -> FastAPI:
             "intent": detected.name if detected else None,
             "confidence": detected.confidence if detected else None,
             "intent_source": detected.source if detected else None,
+            "transcribed_via": transcribed_via,
             "device_id": context.get("device_id"),
             "device_fingerprint": context.get("device_fingerprint"),
             "location": {
@@ -2306,6 +2345,25 @@ def create_app(config: AppConfig) -> FastAPI:
         }
         bus.publish("mobile_capture_saved", payload)
         return {"ok": True, **payload}
+
+    @app.get("/captures")
+    async def list_captures(request: Request, limit: int = 50, user_id: str = "") -> Dict[str, Any]:
+        user = require_session(request)
+        if not config.neo4j.password:
+            return {"ok": False, "error": "Neo4j password not configured", "captures": []}
+        try:
+            captures = await asyncio.to_thread(
+                list_recent_captures,
+                config.neo4j.uri,
+                config.neo4j.user,
+                config.neo4j.password,
+                database=config.neo4j.database,
+                limit=limit,
+                user_id=user_id or None,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "captures": []}
+        return {"ok": True, "captures": captures}
 
     @app.post("/voiceprints/owner-override-enroll")
     async def owner_override_enroll(

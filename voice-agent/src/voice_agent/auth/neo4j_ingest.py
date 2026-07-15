@@ -308,3 +308,60 @@ def save_meeting_to_neo4j(
 
     driver.close()
     return {"meeting_id": meeting_id, "segment_count": len(segment_nodes)}
+
+
+def list_recent_captures(
+    uri: str,
+    user: str,
+    password: str,
+    *,
+    database: Optional[str] = None,
+    limit: int = 50,
+    user_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return recent SophiaCapture nodes for the mobile Thoughts feed."""
+    try:
+        from neo4j import GraphDatabase
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise RuntimeError("neo4j driver not installed") from exc
+
+    limit = max(1, min(int(limit), 200))
+    user_filter = "WHERE capture.user_id = $user_id" if user_id else ""
+    driver = GraphDatabase.driver(uri, auth=(user, password))
+    try:
+        with driver.session(database=database) as session:
+            records = session.run(
+                f"""
+                MATCH (capture:SophiaCapture)
+                {user_filter}
+                RETURN capture.capture_id AS capture_id,
+                       capture.client_capture_id AS client_capture_id,
+                       capture.user_id AS user_id,
+                       capture.transcript AS transcript,
+                       capture.duration_ms AS duration_ms,
+                       capture.intent AS intent,
+                       capture.device_id AS device_id,
+                       capture.created_at AS created_at
+                ORDER BY capture.created_at DESC
+                LIMIT $limit
+                """,
+                limit=limit,
+                user_id=user_id or "",
+            ).data()
+    finally:
+        driver.close()
+
+    out = []
+    for r in records:
+        created = r.get("created_at")
+        out.append({
+            "capture_id": r.get("capture_id"),
+            "client_capture_id": r.get("client_capture_id") or "",
+            "user_id": r.get("user_id") or "",
+            "transcript": r.get("transcript") or "",
+            "duration_ms": r.get("duration_ms") or 0,
+            "intent": r.get("intent") or None,
+            "device_id": r.get("device_id") or "",
+            "created_at": str(created) if created is not None else "",
+        })
+    return out

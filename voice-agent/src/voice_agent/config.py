@@ -58,6 +58,13 @@ class LLMConfig(BaseModel):
     task_model: Optional[str] = None
     timeout: float = 60.0
     task_timeout: Optional[float] = None
+    fleet_discovery: bool = False
+    fleet_node_port: int = 1234
+    fleet_router_url: Optional[str] = None
+    fleet_candidate_nodes: Optional[str] = None
+    fleet_refresh_interval: float = 30.0
+    fleet_chat_max_params: float = 4.0
+    fleet_task_min_params: float = 20.0
     max_steps: int = 4
     system_prompt: str = (
         "You are Sophia voice overlay for Hermes. Keep responses concise, actionable, and safe."
@@ -173,6 +180,20 @@ def _apply_env(config: AppConfig) -> AppConfig:
         llm_update["timeout"] = float(os.environ["SOPHIA_LLM_TIMEOUT"])
     if os.getenv("SOPHIA_TASK_TIMEOUT"):
         llm_update["task_timeout"] = float(os.environ["SOPHIA_TASK_TIMEOUT"])
+    if os.getenv("SOPHIA_FLEET_DISCOVERY"):
+        llm_update["fleet_discovery"] = os.environ["SOPHIA_FLEET_DISCOVERY"].lower() in {"1", "true", "yes", "on"}
+    if os.getenv("SOPHIA_FLEET_NODE_PORT"):
+        llm_update["fleet_node_port"] = int(os.environ["SOPHIA_FLEET_NODE_PORT"])
+    if os.getenv("SOPHIA_FLEET_ROUTER_URL"):
+        llm_update["fleet_router_url"] = os.environ["SOPHIA_FLEET_ROUTER_URL"]
+    if os.getenv("SOPHIA_FLEET_CANDIDATE_NODES"):
+        llm_update["fleet_candidate_nodes"] = os.environ["SOPHIA_FLEET_CANDIDATE_NODES"]
+    if os.getenv("SOPHIA_FLEET_REFRESH_INTERVAL"):
+        llm_update["fleet_refresh_interval"] = float(os.environ["SOPHIA_FLEET_REFRESH_INTERVAL"])
+    if os.getenv("SOPHIA_FLEET_CHAT_MAX_PARAMS"):
+        llm_update["fleet_chat_max_params"] = float(os.environ["SOPHIA_FLEET_CHAT_MAX_PARAMS"])
+    if os.getenv("SOPHIA_FLEET_TASK_MIN_PARAMS"):
+        llm_update["fleet_task_min_params"] = float(os.environ["SOPHIA_FLEET_TASK_MIN_PARAMS"])
     if llm_update:
         config.llm = config.llm.model_copy(update=llm_update)
 

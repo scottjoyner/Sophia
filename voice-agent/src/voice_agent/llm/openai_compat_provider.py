@@ -7,6 +7,25 @@ import requests
 from .provider_base import LLMProvider, LLMResponse
 
 
+class LLMProviderError(Exception):
+    """Raised when an OpenAI-compatible endpoint returns an error payload
+    (including lmstudio's habit of replying with a plain JSON ``{"error": ...}``
+    body and HTTP 200, which ``raise_for_status`` does not catch)."""
+
+
+def _raise_if_error(obj: object) -> None:
+    if not isinstance(obj, dict):
+        return
+    err = obj.get("error")
+    if err is None:
+        return
+    if isinstance(err, dict):
+        msg = err.get("message") or err.get("type") or "unknown error"
+    else:
+        msg = str(err)
+    raise LLMProviderError("LLM endpoint error: " + str(msg))
+
+
 class OpenAICompatProvider(LLMProvider):
     def __init__(
         self,
@@ -36,7 +55,11 @@ class OpenAICompatProvider(LLMProvider):
         }
         resp = requests.post(f"{self.base_url}/v1/chat/completions", headers=headers, json=payload, timeout=self.task_timeout)
         resp.raise_for_status()
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError:
+            raise LLMProviderError("LLM returned a non-JSON response body")
+        _raise_if_error(data)
         content = data["choices"][0]["message"]["content"]
         return LLMResponse(content=content)
 
@@ -63,20 +86,32 @@ class OpenAICompatProvider(LLMProvider):
             if not raw:
                 continue
             line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-            if not line.startswith("data:"):
-                continue
-            data = line[len("data:"):].strip()
-            if data == "[DONE]":
-                break
-            try:
-                obj = json.loads(data)
-                delta = obj["choices"][0]["delta"].get("content")
-                if not delta:
-                    # Some local/reasoning models stream their output under
-                    # reasoning_content instead of content; surface it so the
-                    # caller still sees a response.
-                    delta = obj["choices"][0]["delta"].get("reasoning_content")
-                if delta:
-                    yield delta
-            except Exception:
-                continue
+            if line.startswith("data:"):
+                data = line[len("data:"):].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data)
+                except Exception:
+                    continue
+                _raise_if_error(obj)
+                try:
+                    delta = obj["choices"][0]["delta"].get("content")
+                    if not delta:
+                        # Some local/reasoning models stream their output under
+                        # reasoning_content instead of content; surface it so the
+                        # caller still sees a response.
+                        delta = obj["choices"][0]["delta"].get("reasoning_content")
+                    if delta:
+                        yield delta
+                except Exception:
+                    continue
+            else:
+                # Non-SSE body: lmstudio frequently returns a plain JSON error
+                # object (not wrapped in `data:`) with HTTP 200. Surface it so
+                # the caller can retry against another endpoint.
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                _raise_if_error(obj)

@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#070b10">
+  <title>Sophia · Capture</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #070b10;
+      --panel: #0e151d;
+      --panel-2: #0b1218;
+      --border: #1d2733;
+      --border-2: #273340;
+      --text: #f3f7fb;
+      --muted: #93a3b4;
+      --muted-2: #5b6b7c;
+      --accent: #7dd3fc;
+      --accent-2: #38bdf8;
+      --green: #34d399;
+      --amber: #fbbf24;
+      --red: #fb7185;
+      --radius: 16px;
+      --nav-h: 64px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; height: 100%; }
+    body { background: var(--bg); color: var(--text); overflow: hidden; }
+    button, input, textarea, select { font: inherit; }
+    button { cursor: pointer; border: 0; border-radius: 14px; font-weight: 600; transition: transform .08s, opacity .15s, background .15s; }
+    button:active { transform: scale(.97); }
+    button:disabled { opacity: .4; cursor: default; }
+    input, textarea { width: 100%; border: 1px solid var(--border-2); border-radius: 12px; background: #05090d; color: var(--text); padding: 14px; font-size: 16px; }
+    input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+    .hidden { display: none !important; }
+
+    /* ---- Login ---- */
+    #login { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 22px; background: radial-gradient(1000px 500px at 50% -5%, #14202c, var(--bg)); z-index: 100; }
+    .login-card { width: min(100%, 400px); background: var(--panel); border: 1px solid var(--border); border-radius: 22px; padding: 30px 26px; box-shadow: 0 30px 70px rgba(0,0,0,.5); }
+    .login-card h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: -.02em; }
+    .login-card h1 span { color: var(--accent); }
+    .login-card p { margin: 0 0 22px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+    .record-btn { width: 100%; background: var(--accent); color: #04121a; padding: 16px; font-size: 16px; display: flex; align-items: center; justify-content: center; gap: 10px; }
+    .record-btn.rec { background: var(--red); color: #fff; animation: pulse 1.1s infinite; }
+    @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(251,113,133,.5);} 50% { box-shadow: 0 0 0 12px rgba(251,113,133,0);} }
+    .login-error { color: var(--red); font-size: 13px; min-height: 18px; margin-top: 12px; text-align: center; }
+    .divider { display: flex; align-items: center; gap: 10px; margin: 18px 0; color: var(--muted-2); font-size: 12px; }
+    .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+    #passRow input { margin-bottom: 12px; }
+    .ghost-btn { width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--border-2); padding: 15px; }
+
+    /* ---- App shell ---- */
+    #app { display: none; flex-direction: column; height: 100dvh; }
+    header.topbar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+    .brand { font-weight: 700; font-size: 17px; letter-spacing: -.02em; }
+    .brand span { color: var(--accent); }
+    .pill { margin-left: auto; font-size: 11px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border-2); background: var(--panel-2); color: var(--muted); }
+    .pill.ok { color: #6ee7b7; border-color: var(--green); }
+    .pill.bad { color: #fda4af; border-color: var(--red); }
+    .pill.warn { color: #fcd34d; border-color: var(--amber); }
+
+    .view { flex: 1; min-height: 0; display: none; flex-direction: column; }
+    .view.active { display: flex; }
+
+    /* ---- Capture view ---- */
+    #view-capture { justify-content: space-between; padding: 18px 18px calc(var(--nav-h) + 18px); }
+    .cap-head { text-align: center; }
+    .cap-head h2 { margin: 6px 0 2px; font-size: 22px; letter-spacing: -.02em; }
+    .cap-head p { margin: 0; color: var(--muted); font-size: 13px; }
+    .mic-wrap { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 8px 0; }
+    .mic-orb { width: 150px; height: 150px; border-radius: 50%; background: radial-gradient(circle at 50% 40%, #14323f, #0a1820); border: 2px solid var(--border-2); display: flex; align-items: center; justify-content: center; font-size: 54px; color: var(--accent); transition: transform .15s, box-shadow .2s, border-color .2s; user-select: none; touch-action: none; }
+    .mic-orb.rec { border-color: var(--red); color: var(--red); box-shadow: 0 0 0 10px rgba(251,113,133,.12); transform: scale(1.04); animation: pulse 1.1s infinite; }
+    .mic-hint { color: var(--muted-2); font-size: 12px; text-align: center; min-height: 16px; }
+    .live-transcript { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 16px; font-size: 16px; line-height: 1.55; min-height: 64px; color: var(--text); white-space: pre-wrap; word-wrap: break-word; }
+    .live-transcript.empty { color: var(--muted-2); }
+    .cap-actions { display: flex; gap: 10px; }
+    .cap-actions button { flex: 1; padding: 14px; }
+    .cap-actions .primary { background: var(--accent); color: #04121a; }
+    .cap-actions .secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border-2); }
+
+    /* ---- Thoughts feed ---- */
+    #view-thoughts .feed, #view-chat .messages { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+    .thought { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 14px; }
+    .thought .t-text { font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+    .thought .t-meta { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 11px; color: var(--muted-2); flex-wrap: wrap; }
+    .chip { padding: 2px 9px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border-2); color: var(--muted); text-transform: capitalize; }
+    .thought .t-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .thought .t-actions button { flex: 1; padding: 10px; font-size: 13px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border-2); }
+    .thought .t-actions button.ask { background: var(--accent); color: #04121a; border: 0; }
+    .empty-state { color: var(--muted-2); text-align: center; font-size: 14px; margin-top: 40px; line-height: 1.6; }
+
+    /* ---- Chat ---- */
+    .msg { max-width: 82%; padding: 12px 14px; border-radius: 16px; line-height: 1.5; font-size: 15px; white-space: pre-wrap; word-wrap: break-word; }
+    .msg.user { align-self: flex-end; background: linear-gradient(180deg, #1e3a4d, #16303f); border: 1px solid #2c4a5e; }
+    .msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); }
+    .msg .caret { display: inline-block; width: 8px; height: 16px; background: var(--accent); margin-left: 2px; vertical-align: -3px; animation: blink 1s steps(2) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    .composer { border-top: 1px solid var(--border); padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: var(--panel); display: flex; gap: 8px; align-items: flex-end; }
+    .composer textarea { resize: none; min-height: 46px; max-height: 120px; border-radius: 14px; }
+    .composer .send { flex: 0 0 auto; background: var(--accent); color: #04121a; padding: 0 18px; min-height: 46px; }
+
+    /* ---- Settings ---- */
+    #view-settings { overflow-y: auto; padding: 18px 16px calc(var(--nav-h) + 18px); }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-bottom: 14px; }
+    .card h3 { margin: 0 0 12px; font-size: 14px; color: #cbd5e1; }
+    .card label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 6px; }
+    .row { display: flex; gap: 10px; align-items: center; }
+    .row button { flex: 1; padding: 13px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border-2); }
+    .row button.primary { background: var(--accent); color: #04121a; border: 0; }
+    .mini-mic { flex: 0 0 auto; width: 52px; min-height: 46px; background: var(--panel-2); border: 1px solid var(--border-2); color: var(--text); font-size: 20px; }
+    .mini-mic.rec { border-color: var(--red); color: var(--red); }
+    .status-line { font-size: 13px; color: var(--muted); margin-top: 10px; min-height: 18px; }
+    .status-line.ok { color: #6ee7b7; }
+    .status-line.bad { color: #fda4af; }
+    .kv { display: flex; justify-content: space-between; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+    .kv:last-child { border-bottom: 0; }
+    .kv span:first-child { color: var(--muted); }
+    .card a.link { color: var(--accent); text-decoration: none; font-size: 14px; }
+
+    /* ---- Bottom nav ---- */
+    nav.bottombar { position: fixed; bottom: 0; left: 0; right: 0; height: calc(var(--nav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); display: flex; background: rgba(14,21,29,.96); backdrop-filter: blur(12px); border-top: 1px solid var(--border); z-index: 50; }
+    nav.bottombar button { flex: 1; background: none; border: 0; color: var(--muted-2); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 10px; font-weight: 600; border-radius: 0; }
+    nav.bottombar button .ico { font-size: 22px; }
+    nav.bottombar button.active { color: var(--accent); }
+
+    #toast { position: fixed; bottom: calc(var(--nav-h) + 20px); left: 50%; transform: translateX(-50%); background: #111a24; border: 1px solid var(--border-2); color: var(--text); padding: 11px 18px; border-radius: 12px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 200; max-width: 88%; text-align: center; }
+    #toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div id="login">
+    <form class="login-card" id="loginForm">
+      <h1>Sophia <span>Capture</span></h1>
+      <p>Your voice is the key. Hold to record, then unlock — your passphrase is a fallback.</p>
+      <button type="button" class="record-btn" id="loginMic">🎙 &nbsp;Hold to unlock with voice</button>
+      <div class="login-error" id="voiceLoginStatus">Press and hold the mic, then release to verify.</div>
+      <div class="divider">or</div>
+      <div id="passRow">
+        <input id="pass" type="password" autocomplete="current-password" placeholder="Passphrase (fallback)">
+        <button type="submit" class="ghost-btn">Unlock with passphrase</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">Sophia <span>Capture</span></div>
+      <div class="pill" id="netPill">net: …</div>
+    </header>
+
+    <section class="view active" id="view-capture">
+      <div class="cap-head">
+        <h2>Capture a thought</h2>
+        <p>Speak an idea, a note, or something to build. Sophia saves it and can act on it.</p>
+      </div>
+      <div class="mic-wrap">
+        <div class="mic-orb" id="micOrb">🎙</div>
+        <div class="live-transcript empty" id="liveTranscript">Your words will appear here as you speak…</div>
+        <div class="mic-hint" id="micHint">Hold the mic and speak</div>
+      </div>
+      <div class="cap-actions">
+        <button class="secondary" id="discardBtn">Discard</button>
+        <button class="primary" id="saveBtn" disabled>Save thought</button>
+      </div>
+    </section>
+
+    <section class="view" id="view-thoughts">
+      <div class="feed" id="feed">
+        <div class="empty-state">No thoughts yet.<br>Tap the mic and capture your first idea.</div>
+      </div>
+    </section>
+
+    <section class="view" id="view-chat">
+      <div class="messages" id="messages"></div>
+      <div class="composer">
+        <textarea id="composer" rows="1" placeholder="Message Sophia…"></textarea>
+        <button class="send" id="sendBtn" type="button">Send</button>
+      </div>
+    </section>
+
+    <section class="view" id="view-settings">
+      <div class="card">
+        <h3>🎙 Voice identity</h3>
+        <div class="row">
+          <button class="mini-mic" id="setMic" type="button">🎙</button>
+          <input id="adminKey" type="password" placeholder="owner override key" autocomplete="off">
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <button id="verifyBtn" type="button">Verify voice</button>
+          <button id="overrideBtn" type="button" style="border-color:var(--amber);color:#fcd34d;">Override &amp; retrain</button>
+        </div>
+        <div class="status-line" id="voiceStatus">Hold 🎙 to record, then Verify.</div>
+      </div>
+      <div class="card">
+        <h3>🔗 This device</h3>
+        <div class="kv"><span>Device ID</span><span id="devId">…</span></div>
+        <div class="kv"><span>Platform</span><span id="devPlatform">…</span></div>
+        <div class="kv"><span>Speech API</span><span id="devSpeech">…</span></div>
+        <div class="kv"><span>Server transcription</span><span id="devServer">…</span></div>
+      </div>
+      <div class="card">
+        <h3>🔀 Views</h3>
+        <a class="link" href="/desktop">Open the full desktop console →</a>
+        <div style="height:10px;"></div>
+        <button class="ghost-btn" id="logoutBtn" style="width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--border-2);padding:14px;">Lock Sophia</button>
+      </div>
+    </section>
+
+    <nav class="bottombar">
+      <button class="active" data-view="capture"><span class="ico">🎙</span>Capture</button>
+      <button data-view="thoughts"><span class="ico">💡</span>Thoughts</button>
+      <button data-view="chat"><span class="ico">💬</span>Chat</button>
+      <button data-view="settings"><span class="ico">⚙️</span>Settings</button>
+    </nav>
+  </div>
+
+  <div id="toast"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const loginEl = $('login'), appEl = $('app');
+  const messagesEl = $('messages');
+  const feedEl = $('feed');
+  const composer = $('composer'), sendBtn = $('sendBtn');
+
+  // ---- helpers ----
+  function toast(msg, ms = 2600) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms);
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function relTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso.includes('T') ? iso : iso.replace(' ', 'T'));
+    if (isNaN(d)) return '';
+    const s = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s/60) + 'm ago';
+    if (s < 86400) return Math.floor(s/3600) + 'h ago';
+    return Math.floor(s/86400) + 'd ago';
+  }
+  let isOffline = !navigator.onLine;
+  const offlineQueue = [];
+  function updateNetPill() {
+    const p = $('netPill');
+    if (isOffline) { p.className = 'pill bad'; p.textContent = 'offline' + (offlineQueue.length ? ' ('+offlineQueue.length+')' : ''); }
+    else { p.className = 'pill ok'; p.textContent = 'online'; }
+  }
+  function enqueueOffline(fn) { if (!offlineQueue.includes(fn)) offlineQueue.push(fn); updateNetPill(); }
+  async function flushOffline() {
+    if (!offlineQueue.length) return;
+    const pending = offlineQueue.splice(0, offlineQueue.length); updateNetPill();
+    for (const fn of pending) { try { await fn(); } catch {} }
+  }
+  window.addEventListener('offline', () => { isOffline = true; updateNetPill(); });
+  window.addEventListener('online', () => { isOffline = false; updateNetPill(); flushOffline(); });
+  updateNetPill();
+
+  async function api(path, opts = {}) {
+    try {
+      const r = await fetch(path, { credentials: 'same-origin', ...opts });
+      if (isOffline) { isOffline = false; updateNetPill(); }
+      return r;
+    } catch (err) { if (!isOffline) { isOffline = true; updateNetPill(); } throw err; }
+  }
+
+  // ---- live context sent with chat (location/device, forward-looking image support) ----
+  async function currentContext() {
+    const ctx = {
+      platform: $('devPlatform').textContent || '',
+      device_id: $('devId').textContent || '',
+      timezone: (Intl.DateTimeFormat().resolvedOptions().timeZone) || '',
+    };
+    if (navigator.geolocation) {
+      try {
+        const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: false, timeout: 3000, maximumAge: 600000 }));
+        ctx.location = { lat: +pos.coords.latitude.toFixed(5), lng: +pos.coords.longitude.toFixed(5), accuracy_m: Math.round(pos.coords.accuracy || 0) };
+      } catch (e) { /* location denied/unavailable — skip */ }
+    }
+    return ctx;
+  }
+
+  // ---- device info ----
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const speechAvailable = !!SR;
+  $('devPlatform').textContent = /iphone|ipad|ipod|android/i.test(navigator.userAgent) ? (navigator.userAgent.match(/iPhone|iPad|iPod|Android/i) || ['mobile'])[0] : 'desktop';
+  $('devSpeech').textContent = speechAvailable ? 'on-device (browser)' : 'server (whisper)';
+  $('devServer').textContent = 'auto if no transcript';
+  try { $('devId').textContent = (localStorage.getItem('sophia_device_id') || 'auto').slice(0, 12); } catch {}
+  try {
+    if (!localStorage.getItem('sophia_device_id')) {
+      const id = 'm' + Math.random().toString(36).slice(2, 10);
+      localStorage.setItem('sophia_device_id', id);
+      $('devId').textContent = id;
+    }
+  } catch {}
+
+  // ---- navigation ----
+  const views = { capture: $('view-capture'), thoughts: $('view-thoughts'), chat: $('view-chat'), settings: $('view-settings') };
+  document.querySelectorAll('nav.bottombar button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const v = btn.dataset.view;
+      document.querySelectorAll('nav.bottombar button').forEach(b => b.classList.toggle('active', b === btn));
+      Object.entries(views).forEach(([k, el]) => el.classList.toggle('active', k === v));
+      if (v === 'thoughts') loadThoughts();
+      if (v === 'settings') refreshVoiceStatus();
+    });
+  });
+
+  // ---- boot ----
+  let sessionMeta = {};
+  async function boot() {
+    try {
+      const r = await api('/auth/session'); const d = await r.json();
+      if (!d.authenticated) { showLogin(); return; }
+      sessionMeta = d; enterApp();
+    } catch { showLogin(); }
+  }
+  function showLogin() { loginEl.classList.remove('hidden'); $('loginMic').disabled = false; appEl.style.display = 'none'; }
+  function enterApp() {
+    loginEl.classList.add('hidden'); appEl.style.display = 'flex';
+    loadThoughts();
+  }
+
+  // ---- login (voice primary) ----
+  const loginMic = $('loginMic'), voiceLoginStatus = $('voiceLoginStatus');
+  let recorder = null, micStream = null, micChunks = [], lastVoiceBlob = null;
+  function startRec(onStart) {
+    if (!navigator.mediaDevices || !window.MediaRecorder) { toast('This needs a secure context + mic.'); return false; }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+      micStream = stream; recorder = new MediaRecorder(stream);
+      micChunks = []; recorder.ondataavailable = (ev) => { if (ev.data.size) micChunks.push(ev.data); };
+      recorder.start(); onStart && onStart();
+    }).catch(() => toast('Microphone blocked.'));
+    return true;
+  }
+  function stopRec(onStop) {
+    if (!recorder || recorder.state === 'inactive') return;
+    const stopped = new Promise(res => recorder.onstop = res);
+    recorder.stop(); stopped.then(() => {
+      if (micStream) micStream.getTracks().forEach(t => t.stop());
+      lastVoiceBlob = new Blob(micChunks, { type: recorder.mimeType || 'audio/webm' });
+      if (lastVoiceBlob.size) onStop && onStop(lastVoiceBlob);
+    });
+  }
+  loginMic.addEventListener('mousedown', () => { loginMic.classList.add('rec'); loginMic.textContent = '● Recording…'; voiceLoginStatus.textContent = 'Listening… release to verify.'; startRec(); });
+  loginMic.addEventListener('mouseup', () => { loginMic.classList.remove('rec'); loginMic.textContent = '🎙 Hold to unlock with voice'; stopRec(doVoiceLogin); });
+  loginMic.addEventListener('mouseleave', () => { if (recorder && recorder.state !== 'inactive') { loginMic.classList.remove('rec'); loginMic.textContent = '🎙 Hold to unlock with voice'; stopRec(doVoiceLogin); } });
+  loginMic.addEventListener('touchstart', (e) => { e.preventDefault(); loginMic.classList.add('rec'); loginMic.textContent = '● Recording…'; voiceLoginStatus.textContent = 'Listening… release to verify.'; startRec(); });
+  loginMic.addEventListener('touchend', (e) => { e.preventDefault(); loginMic.classList.remove('rec'); loginMic.textContent = '🎙 Hold to unlock with voice'; stopRec(doVoiceLogin); });
+  async function doVoiceLogin(blob) {
+    if (!blob || !blob.size) return;
+    voiceLoginStatus.textContent = 'Verifying voice identity…'; loginMic.disabled = true;
+    const form = new FormData(); form.append('audio', blob, 'voice-login.webm');
+    form.append('user_id', 'scott'); form.append('session_id', 'mobile');
+    try {
+      const r = await api('/auth/voice-login', { method: 'POST', body: form }); const d = await r.json();
+      if (r.ok && d.authenticated) { location.reload(); return; }
+      const pct = ((d.score || 0) * 100).toFixed(0);
+      voiceLoginStatus.className = 'login-error'; voiceLoginStatus.textContent = 'Voice rejected ' + pct + '% — try the passphrase below.';
+    } catch { voiceLoginStatus.className = 'login-error'; voiceLoginStatus.textContent = 'Voice unlock failed.'; }
+    finally { loginMic.disabled = false; }
+  }
+  $('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passphrase: $('pass').value }) });
+      if (r.ok) location.reload(); else voiceLoginStatus.className = 'login-error'; voiceLoginStatus.textContent = 'Invalid passphrase.';
+    } catch { voiceLoginStatus.className = 'login-error'; voiceLoginStatus.textContent = 'Login failed.'; }
+  });
+  $('logoutBtn').addEventListener('click', async () => { await api('/auth/logout', { method: 'POST' }); location.reload(); });
+
+  // ---- Capture view ----
+  const micOrb = $('micOrb'), liveTranscript = $('liveTranscript'), micHint = $('micHint'), saveBtn = $('saveBtn'), discardBtn = $('discardBtn');
+  let capturing = false, liveText = '', srFinal = '', srInterim = '', recognition = null, pendingBlob = null, pendingTranscript = '';
+  if (speechAvailable) {
+    recognition = new SR(); recognition.continuous = true; recognition.interimResults = true; recognition.lang = 'en-US';
+    recognition.onresult = (e) => {
+      srFinal = ''; srInterim = '';
+      for (let i = 0; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) srFinal += t; else srInterim += t;
+      }
+      liveText = (srFinal + ' ' + srInterim).trim();
+      renderLive();
+    };
+    recognition.onerror = () => { micHint.textContent = 'Browser speech paused — still recording audio.'; };
+    recognition.onend = () => { if (capturing) { try { recognition.start(); } catch {} } };
+  }
+  function renderLive() {
+    if (!liveText) { liveTranscript.classList.add('empty'); liveTranscript.textContent = 'Your words will appear here as you speak…'; }
+    else { liveTranscript.classList.remove('empty'); liveTranscript.textContent = liveText; }
+    saveBtn.disabled = !liveText.trim() && !pendingBlob;
+  }
+  function beginCapture() {
+    if (capturing) return; capturing = true; liveText = ''; srFinal = ''; srInterim = ''; pendingBlob = null; pendingTranscript = '';
+    micOrb.classList.add('rec'); micHint.textContent = 'Listening… release to finish.'; renderLive();
+    if (recognition) { try { recognition.start(); } catch {} }
+    startRec();
+  }
+  function endCapture() {
+    if (!capturing) return; capturing = false; micOrb.classList.remove('rec'); micHint.textContent = 'Processing…';
+    if (recognition) { try { recognition.stop(); } catch {} }
+    stopRec((blob) => {
+      pendingBlob = blob;
+      pendingTranscript = (srFinal || '').trim();
+      if (pendingTranscript) { liveText = pendingTranscript; renderLive(); }
+      micHint.textContent = liveText.trim() ? 'Looks good? Save it.' : 'Transcribing on server…';
+      saveBtn.disabled = false;
+    });
+  }
+  micOrb.addEventListener('mousedown', beginCapture);
+  micOrb.addEventListener('mouseup', endCapture);
+  micOrb.addEventListener('mouseleave', () => { if (capturing) endCapture(); });
+  micOrb.addEventListener('touchstart', (e) => { e.preventDefault(); beginCapture(); });
+  micOrb.addEventListener('touchend', (e) => { e.preventDefault(); endCapture(); });
+  discardBtn.addEventListener('click', () => {
+    if (recognition) { try { recognition.abort(); } catch {} }
+    capturing = false; pendingBlob = null; liveText = ''; micOrb.classList.remove('rec'); micHint.textContent = 'Hold the mic and speak'; renderLive();
+  });
+  saveBtn.addEventListener('click', async () => {
+    const text = (!liveTranscript.classList.contains('empty')) ? liveText.trim() : '';
+    if (!text && !pendingBlob) { toast('Nothing to save yet.'); return; }
+    saveBtn.disabled = true; micHint.textContent = 'Saving…';
+    const form = new FormData();
+    if (pendingBlob) form.append('audio', pendingBlob, 'capture.webm');
+    form.append('transcript', text);
+    form.append('user_id', sessionMeta.user_id || 'scott');
+    form.append('session_id', 'mobile');
+    form.append('device_id', $('devId').textContent || '');
+    form.append('client_context', 'mobile_capture');
+    form.append('platform', $('devPlatform').textContent || '');
+    const capCtx = await currentContext();
+    if (capCtx.location) {
+      form.append('location_lat', String(capCtx.location.lat));
+      form.append('location_lng', String(capCtx.location.lng));
+      form.append('location_accuracy_m', String(capCtx.location.accuracy_m));
+    }
+    try {
+      const r = await api('/capture', { method: 'POST', body: form }); const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'save failed');
+      const shown = d.transcript || text;
+      micHint.textContent = 'Saved ✓';
+      liveTranscript.classList.remove('empty'); liveTranscript.textContent = shown;
+      if (d.transcribed_via) micHint.textContent = 'Saved ✓ (transcribed by ' + d.transcribed_via + ')';
+      toast('Thought saved' + (d.intent ? ' · ' + d.intent : ''));
+      pendingBlob = null; liveText = '';
+      loadThoughts(true);
+      setTimeout(() => { micHint.textContent = 'Hold the mic and speak'; renderLive(); }, 1400);
+    } catch (err) {
+      micHint.textContent = 'Save failed: ' + (err.message || err);
+      saveBtn.disabled = false;
+    }
+  });
+
+  // ---- Thoughts feed ----
+  async function loadThoughts(silent) {
+    try {
+      const d = await (await api('/captures?limit=60')).json();
+      const caps = (d.captures || []);
+      if (!caps.length) { feedEl.innerHTML = '<div class="empty-state">No thoughts yet.<br>Tap the mic and capture your first idea.</div>'; return; }
+      feedEl.innerHTML = '';
+      caps.forEach(c => feedEl.appendChild(thoughtCard(c)));
+    } catch (e) { if (!silent) feedEl.innerHTML = '<div class="empty-state">Could not load thoughts.</div>'; }
+  }
+  function thoughtCard(c) {
+    const el = document.createElement('div'); el.className = 'thought';
+    const text = c.transcript || '(no transcript)';
+    const meta = [];
+    if (c.intent) meta.push('<span class="chip">' + escapeHtml(c.intent) + '</span>');
+    if (c.duration_ms) meta.push('<span>' + Math.max(1, Math.round(c.duration_ms/1000)) + 's</span>');
+    if (c.created_at) meta.push('<span>' + relTime(c.created_at) + '</span>');
+    el.innerHTML =
+      '<div class="t-text">' + escapeHtml(text) + '</div>' +
+      '<div class="t-meta">' + meta.join('') + '</div>' +
+      '<div class="t-actions">' +
+        '<button class="ask" data-ask="' + escapeHtml(text) + '">Ask Sophia</button>' +
+        '<button data-task="' + escapeHtml(text) + '">Make a task</button>' +
+      '</div>';
+    el.querySelector('[data-ask]').addEventListener('click', (e) => {
+      switchView('chat'); composer.value = e.target.dataset.ask; setTimeout(() => sendMessage(), 50);
+    });
+    el.querySelector('[data-task]').addEventListener('click', async (e) => {
+      const btn = e.target; btn.disabled = true; btn.textContent = 'Sending…';
+      try {
+        const r = await api('/dispatch/to-assistx', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event_type: 'task_created', text: e.target.dataset.task, metadata: { source: 'sophia_mobile_capture' }, auto_dispatch: true }) });
+        const d = await r.json();
+        toast(d.sent ? 'Task sent to AssistX ✓' : 'Dispatch failed: ' + (d.error || ''));
+        btn.textContent = d.sent ? 'Sent ✓' : 'Retry';
+      } catch (err) { btn.textContent = 'Retry'; toast('Dispatch error: ' + err.message); }
+      finally { if (btn.textContent === 'Sending…') { btn.disabled = false; btn.textContent = 'Make a task'; } }
+    });
+    return el;
+  }
+
+  // ---- Chat (reuses streaming protocol) ----
+  const history = [];
+  let streaming = false;
+  function addMessage(role, text, caret) {
+    const el = document.createElement('div'); el.className = 'msg ' + role;
+    el.innerHTML = escapeHtml(text) + (caret ? '<span class="caret"></span>' : '');
+    messagesEl.appendChild(el); messagesEl.scrollTop = messagesEl.scrollHeight; return el;
+  }
+  async function sendMessage() {
+    const text = composer.value.trim(); if (!text || streaming) return;
+    composer.value = ''; composer.style.height = 'auto';
+    addMessage('user', text); history.push({ role: 'user', content: text });
+    if (history.length > 24) history.shift();
+    const aEl = addMessage('assistant', '', true); let full = '';
+    streaming = true; sendBtn.disabled = true;
+    const payload = [
+      { role: 'system', content: 'You are Sophia, a concise and proactive personal assistant. Answer clearly; when the user asks for something to be done, make the request explicit so it becomes a task.' },
+      ...history.slice(0, -1), { role: 'user', content: text },
+    ];
+    try {
+      const res = await api('/api/chat/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: payload, session_id: 'mobile', context: await currentContext() }) });
+      if (res.status === 401) { toast('Session expired — please log in again.'); showLogin(); return; }
+      if (!res.ok || !res.body) throw new Error('stream failed');
+      const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+      while (true) {
+        const { done, value } = await reader.read(); if (done) break;
+        buf += dec.decode(value, { stream: true }); let idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2);
+          if (!chunk.startsWith('data:')) continue;
+          let evt; try { evt = JSON.parse(chunk.slice(5).trim()); } catch { continue; }
+          if (evt.type === 'token') { aEl.querySelector('.caret')?.remove(); aEl.innerHTML = escapeHtml(aEl.textContent + evt.text) + '<span class="caret"></span>'; messagesEl.scrollTop = messagesEl.scrollHeight; }
+          else if (evt.type === 'tasks') { if (evt.tasks && evt.tasks.length) toast(evt.tasks.length + ' task(s) extracted'); }
+          else if (evt.type === 'error') { aEl.querySelector('.caret')?.remove(); aEl.innerHTML = escapeHtml('⚠ ' + (evt.error || 'error')); }
+          else if (evt.type === 'done') aEl.querySelector('.caret')?.remove();
+        }
+      }
+      if (buf.startsWith('data:')) { try { const evt = JSON.parse(buf.slice(5).trim()); if (evt.type === 'error') aEl.innerHTML = escapeHtml('⚠ ' + evt.error); } catch {} }
+    } catch (err) {
+      aEl.querySelector('.caret')?.remove();
+      if (isOffline) { aEl.innerHTML = escapeHtml('⚠ Offline — queued.'); enqueueOffline(() => { aEl.remove(); sendMessage(); }); }
+      else aEl.innerHTML = escapeHtml('⚠ Could not reach Sophia: ' + err.message);
+    } finally { streaming = false; sendBtn.disabled = false; full = aEl.textContent || ''; if (full) history.push({ role: 'assistant', content: full }); }
+  }
+  sendBtn.addEventListener('click', sendMessage);
+  composer.addEventListener('input', () => { composer.style.height = 'auto'; composer.style.height = Math.min(120, composer.scrollHeight) + 'px'; });
+  composer.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+  function switchView(v) {
+    const btn = document.querySelector('nav.bottombar button[data-view="'+v+'"]'); if (btn) btn.click();
+  }
+
+  // ---- Settings: voice verify ----
+  const setMic = $('setMic'), adminKey = $('adminKey'), verifyBtn = $('verifyBtn'), overrideBtn = $('overrideBtn'), voiceStatus = $('voiceStatus');
+  try { const k = localStorage.getItem('sophia_admin_key'); if (k) adminKey.value = k; } catch {}
+  adminKey.addEventListener('input', () => { try { localStorage.setItem('sophia_admin_key', adminKey.value); } catch {} });
+  setMic.addEventListener('mousedown', () => { setMic.classList.add('rec'); startRec(); });
+  setMic.addEventListener('mouseup', () => { setMic.classList.remove('rec'); stopRec((b) => { lastVoiceBlob = b; verifyVoiceCheck(false); }); });
+  setMic.addEventListener('mouseleave', () => { if (recorder && recorder.state !== 'inactive') { setMic.classList.remove('rec'); stopRec((b) => { lastVoiceBlob = b; verifyVoiceCheck(false); }); } });
+  setMic.addEventListener('touchstart', (e) => { e.preventDefault(); setMic.classList.add('rec'); startRec(); });
+  setMic.addEventListener('touchend', (e) => { e.preventDefault(); setMic.classList.remove('rec'); stopRec((b) => { lastVoiceBlob = b; verifyVoiceCheck(false); }); });
+  verifyBtn.addEventListener('click', () => verifyVoiceCheck(false));
+  overrideBtn.addEventListener('click', overrideAndTrain);
+  async function verifyVoiceCheck(showToast) {
+    if (!lastVoiceBlob || !lastVoiceBlob.size) { voiceStatus.className = 'status-line bad'; voiceStatus.textContent = 'Record a voice clip first (hold 🎙).'; return; }
+    const form = new FormData(); form.append('audio', lastVoiceBlob, 'voice-check.webm');
+    form.append('user_id', sessionMeta.user_id || 'scott'); form.append('session_id', 'mobile');
+    voiceStatus.className = 'status-line'; voiceStatus.textContent = 'Verifying voice…';
+    try {
+      const r = await api('/auth/verify', { method: 'POST', body: form }); const d = await r.json();
+      const pct = ((d.score || 0) * 100).toFixed(0);
+      if (d.accepted) { voiceStatus.className = 'status-line ok'; voiceStatus.textContent = 'Voice accepted ' + pct + '%'; }
+      else { voiceStatus.className = 'status-line bad'; voiceStatus.textContent = 'Voice rejected ' + pct + '% — use Override & retrain.'; }
+      if (showToast) toast((d.accepted ? 'Accepted ' : 'Rejected ') + pct + '%', 3200);
+    } catch (err) { voiceStatus.className = 'status-line bad'; voiceStatus.textContent = 'Voice check failed.'; }
+  }
+  async function overrideAndTrain() {
+    if (!lastVoiceBlob || !lastVoiceBlob.size) { voiceStatus.className = 'status-line bad'; voiceStatus.textContent = 'Record a clip first.'; return; }
+    const key = adminKey.value || ''; if (!key.trim()) { voiceStatus.className = 'status-line bad'; voiceStatus.textContent = 'Owner override key required.'; return; }
+    const form = new FormData(); form.append('audio', lastVoiceBlob, 'override.webm');
+    form.append('user_id', sessionMeta.user_id || 'scott'); form.append('session_id', 'mobile'); form.append('admin_key', key);
+    voiceStatus.className = 'status-line'; voiceStatus.textContent = 'Override + retraining…';
+    try {
+      const r = await api('/voiceprints/owner-override-enroll', { method: 'POST', body: form }); const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'failed');
+      voiceStatus.className = 'status-line ok'; voiceStatus.textContent = 'Voiceprint strengthened (' + (d.sample_count || '?') + ' samples). Re-verifying…';
+      await verifyVoiceCheck(false);
+    } catch (err) { voiceStatus.className = 'status-line bad'; voiceStatus.textContent = 'Override failed: ' + (err.message || err); }
+  }
+  function refreshVoiceStatus() { /* placeholder for future live health */ }
+
+  boot();
+})();
+</script>
+</body>
+</html>
