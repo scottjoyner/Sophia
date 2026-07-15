@@ -129,6 +129,30 @@ def test_enroll_no_usable_clips_raises(tmp_path) -> None:
         enroll_from_files(cfg, "alice", [str(silent)], min_seconds=0.01, max_seconds=30.0)
 
 
+def test_enroll_rejects_outlier_clip(tmp_path, monkeypatch) -> None:
+    from voice_agent.auth.speaker_embedder import SpeakerEmbedder
+
+    scripted = {
+        "good1.wav": [1.0, 0.0, 0.0],
+        "good2.wav": [1.0, 0.0, 0.0],
+        "bad.wav": [0.0, 1.0, 0.0],
+    }
+    seq = iter(scripted.values())
+
+    def fake_embed(audio, sr):
+        return list(next(seq))
+
+    monkeypatch.setattr(SpeakerEmbedder, "__init__", lambda self: None)
+    monkeypatch.setattr(SpeakerEmbedder, "embed", staticmethod(fake_embed))
+
+    files = [str(_make_wav(tmp_path / name, seconds=3.0)) for name in scripted]
+    cfg = _config(tmp_path)
+    result = enroll_from_files(cfg, "carol", files, min_seconds=0.01, max_seconds=30.0)
+    assert result["sample_count"] == 2
+    assert len(result["rejected_outliers"]) == 1
+    assert result["rejected_outliers"][0].endswith("bad.wav")
+
+
 class _FakeGraph:
     def __init__(self):
         self.saved = []
@@ -240,6 +264,52 @@ def test_registry_sqlite_roundtrip(tmp_path) -> None:
     assert reg.get_historical_candidates("alice") == []
     assert reg.backfill_global_speaker_embeddings() == {"ok": False, "error": "Neo4j not configured"}
     assert reg.reconcile_to_neo4j() == {"ok": False, "error": "Neo4j not configured"}
+
+
+class _PushOnlyGraph:
+    def __init__(self):
+        self.saved = []
+
+    def get_active_records(self, user_id):
+        return []
+
+    def save_voiceprint(self, **kwargs):
+        self.saved.append(dict(kwargs))
+        return {"version_id": "v1"}
+
+    def list_user_ids(self):
+        return []
+
+
+def test_reconcile_pushes_sqlite_to_neo4j(tmp_path) -> None:
+    cfg = _config(tmp_path)
+    wav = _make_wav(tmp_path / "voice.wav", seconds=3.0)
+    enroll_from_files(cfg, "alice", [str(wav)], min_seconds=0.01, max_seconds=30.0)
+    reg = VoiceprintRegistry(Path(cfg.paths.artifacts_dir) / "results.sqlite", cfg)
+    graph = _PushOnlyGraph()
+    reg.graph = graph
+    out = reg.reconcile_to_neo4j()
+    assert out["ok"] is True
+    assert out["synced"] == 1
+    assert out["skipped"] == 0
+    assert out["drift"] == 0
+    assert len(graph.saved) == 1
+    pushed = graph.saved[0]
+    sqlite_rec = reg.db.fetch_voiceprint("alice")
+    assert list(pushed["embedding_mean"]) == list(sqlite_rec["embedding"])
+
+
+def test_reconcile_check_only_reports_without_mutating(tmp_path) -> None:
+    cfg = _config(tmp_path)
+    wav = _make_wav(tmp_path / "voice.wav", seconds=3.0)
+    enroll_from_files(cfg, "alice", [str(wav)], min_seconds=0.01, max_seconds=30.0)
+    reg = VoiceprintRegistry(Path(cfg.paths.artifacts_dir) / "results.sqlite", cfg)
+    graph = _PushOnlyGraph()
+    reg.graph = graph
+    out = reg.reconcile_to_neo4j(check_only=True)
+    assert out["check_only"] is True
+    assert out["synced"] == 1
+    assert len(graph.saved) == 0
 
 
 def test_registry_graph_routing(tmp_path) -> None:

@@ -2477,6 +2477,7 @@ def create_app(config: AppConfig) -> FastAPI:
         user_id: str = Form(default="scott"),
         admin_key: str = Form(default=""),
     ) -> dict[str, Any]:
+        require_session(request)
         _require_owner_override(config, user_id, admin_key)
         registry = _voiceprint_registry()
         rec = registry.get(user_id)
@@ -2500,6 +2501,7 @@ def create_app(config: AppConfig) -> FastAPI:
         admin_key: str = Form(default=""),
         match_threshold: float = Form(default=0.85),
     ) -> dict[str, Any]:
+        require_session(request)
         _require_owner_override(config, config.auth.owner_user_id, admin_key)
         registry = _voiceprint_registry()
         if not registry.graph:
@@ -2515,6 +2517,7 @@ def create_app(config: AppConfig) -> FastAPI:
         admin_key: str = Form(default=""),
         force: bool = Form(default=False),
     ) -> dict[str, Any]:
+        require_session(request)
         _require_owner_override(config, config.auth.owner_user_id, admin_key)
         registry = _voiceprint_registry()
         if not registry.graph:
@@ -2525,7 +2528,8 @@ def create_app(config: AppConfig) -> FastAPI:
             raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
 
     @app.post("/voiceprints/train-neo4j")
-    async def train_voiceprint_from_neo4j(req: Neo4jEnrollRequest) -> dict[str, Any]:
+    async def train_voiceprint_from_neo4j(request: Request, req: Neo4jEnrollRequest) -> dict[str, Any]:
+        require_session(request)
         uri = req.neo4j_uri or config.neo4j.uri
         user = req.neo4j_user or config.neo4j.user
         password = req.neo4j_pass or config.neo4j.password

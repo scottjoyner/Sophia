@@ -336,48 +336,101 @@ class VoiceprintRegistry:
             return {"ok": False, "error": "Neo4j not configured"}
         return {"ok": True, **self.graph.backfill_global_speaker_embeddings(match_threshold=match_threshold)}
 
-    def reconcile_to_neo4j(self, source: str = "reconcile", force: bool = False) -> dict[str, Any]:
-        """Push locally-stored voiceprints (SQLite) into Neo4j so the graph stays
-        eventually consistent when enrollments happened while Neo4j was unavailable.
+    def _push_to_graph(self, user_id: str, device_id: str | None, rec: dict[str, Any], source: str) -> None:
+        self.graph.save_voiceprint(
+            user_id=user_id,
+            embedding_mean=list(rec.get("embedding") or []),
+            samples=rec.get("samples") or {"samples": []},
+            threshold=float(rec.get("threshold") or 0.6),
+            source=source,
+            append=False,
+            device_id=None if device_id in (None, "default") else device_id,
+        )
 
-        Skips a (user, device) when the graph already holds an identical active
-        embedding, to avoid churning VoiceprintVersion history on every run.
+    def reconcile_to_neo4j(
+        self, source: str = "reconcile", force: bool = False, check_only: bool = False
+    ) -> dict[str, Any]:
+        """Reconcile the local SQLite voiceprint store (the source of truth for
+        enrollments performed on this node) against Neo4j.
+
+        SQLite is treated as canonical: any ``(user, device)`` present locally
+        but missing or differing in Neo4j is (re)pushed so the graph catches up
+        after enrollments that happened while Neo4j was unavailable. Records that
+        exist only in Neo4j (and therefore cannot be repaired from the local
+        store) are reported under ``graph_only`` for manual review.
+
+        Pass ``check_only=True`` to compute the drift report without mutating
+        Neo4j.
         """
         if not self.graph:
             return {"ok": False, "error": "Neo4j not configured"}
-        summary: dict[str, Any] = {"synced": 0, "skipped": 0, "errors": 0, "users": []}
+
+        def _threshold(rec: dict[str, Any]) -> float:
+            return float(rec.get("threshold") or 0.6)
+
+        def _embedding(rec: dict[str, Any]) -> list[float]:
+            return list(rec.get("embedding") or [])
+
+        summary: dict[str, Any] = {
+            "ok": True,
+            "synced": 0,
+            "skipped": 0,
+            "drift": 0,
+            "graph_only": 0,
+            "errors": 0,
+            "check_only": check_only,
+            "users": [],
+        }
+
         for uid in self.list_users():
             try:
-                records = self.get_all_for_user(uid)
-                for rec in records:
-                    emb = rec.get("embedding") or []
-                    if not emb:
+                entry: dict[str, Any] = {"user_id": uid, "synced": 0, "skipped": 0, "drift": 0, "graph_only": 0}
+                sqlite_recs: list[tuple[str | None, dict[str, Any]]] = []
+                identity = self.db.fetch_voiceprint(uid)
+                if identity:
+                    sqlite_recs.append((None, identity))
+                for device_id, rec in self.db.fetch_device_voiceprints(uid).items():
+                    sqlite_recs.append((device_id, rec))
+
+                graph_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+                for grec in self.graph.get_active_records(uid):
+                    did = grec.get("device_id") or "default"
+                    scope = "identity" if did == "default" else "device"
+                    graph_by_key[(scope, did)] = grec
+
+                synced_keys: set[tuple[str, str]] = set()
+                for device_id, rec in sqlite_recs:
+                    key = ("identity" if device_id in (None, "default") else "device", device_id or "default")
+                    synced_keys.add(key)
+                    grec = graph_by_key.get(key)
+                    if grec is None:
+                        if not check_only:
+                            self._push_to_graph(uid, device_id, rec, source)
+                        summary["synced"] += 1
+                        entry["synced"] += 1
                         continue
-                    device_id = rec.get("device_id")
-                    if device_id in (None, "default"):
-                        device_id = None
-                    if not force:
-                        existing = (
-                            self.graph.get_active_record(uid)
-                            if device_id is None
-                            else self.graph.get_device_record(uid, device_id)
-                        )
-                        if existing and list(existing.get("embedding") or []) == list(emb):
-                            summary["skipped"] += 1
-                            continue
-                    self.graph.save_voiceprint(
-                        user_id=uid,
-                        embedding_mean=emb,
-                        samples=rec.get("samples") or {"samples": []},
-                        threshold=float(rec.get("threshold") or 0.6),
-                        source=source,
-                        append=False,
-                        device_id=device_id,
-                    )
+                    same_emb = _embedding(grec) == _embedding(rec)
+                    same_thr = _threshold(grec) == _threshold(rec)
+                    if same_emb and same_thr and not force:
+                        summary["skipped"] += 1
+                        entry["skipped"] += 1
+                        continue
+                    if not (same_emb and same_thr):
+                        summary["drift"] += 1
+                        entry["drift"] += 1
+                    if not check_only:
+                        self._push_to_graph(uid, device_id, rec, source)
                     summary["synced"] += 1
-                summary["users"].append({"user_id": uid, "synced": summary["synced"]})
+                    entry["synced"] += 1
+
+                for (scope, did) in graph_by_key:
+                    if (scope, did) in synced_keys:
+                        continue
+                    summary["graph_only"] += 1
+                    entry["graph_only"] += 1
+
+                summary["users"].append(entry)
             except Exception as exc:
                 summary["errors"] += 1
                 summary["users"].append({"user_id": uid, "error": f"{type(exc).__name__}: {exc}"})
-        summary["ok"] = True
         return summary

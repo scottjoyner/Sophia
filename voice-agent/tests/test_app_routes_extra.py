@@ -41,6 +41,12 @@ def _enroll_alice(client, tmp_path):
     return client.post("/voiceprints/enroll", files={"audio": ("voice.wav", wav, "audio/wav")}, data={"user_id": "alice"})
 
 
+def _login(client):
+    r = client.post("/auth/login", json={"passphrase": "test-pass"})
+    assert r.status_code == 200
+    return client
+
+
 def test_owner_override_enroll_requires_override_enabled(tmp_path, monkeypatch) -> None:
     client = _make_client(tmp_path, monkeypatch, override=False)
     wav = _wav_bytes(tmp_path / "voice.wav")
@@ -77,6 +83,7 @@ def test_owner_override_enroll_success(tmp_path, monkeypatch) -> None:
 
 def test_link_speakers_no_graph_returns_400(tmp_path, monkeypatch) -> None:
     client = _make_client(tmp_path, monkeypatch, override=True)
+    client = _login(client)
     wav = _wav_bytes(tmp_path / "voice.wav")
     client.post(
         "/voiceprints/owner-override-enroll",
@@ -90,20 +97,42 @@ def test_link_speakers_no_graph_returns_400(tmp_path, monkeypatch) -> None:
 
 def test_backfill_no_graph_returns_400(tmp_path, monkeypatch) -> None:
     client = _make_client(tmp_path, monkeypatch, override=True)
+    client = _login(client)
     r = client.post("/voiceprints/backfill-global-speakers", data={"admin_key": "test-admin-key"})
     assert r.status_code == 400
 
 
 def test_reconcile_no_graph_returns_400(tmp_path, monkeypatch) -> None:
     client = _make_client(tmp_path, monkeypatch, override=True)
+    client = _login(client)
     r = client.post("/voiceprints/reconcile", data={"admin_key": "test-admin-key"})
     assert r.status_code == 400
 
 
-def test_train_neo4j_requires_password(tmp_path, monkeypatch) -> None:
+def test_train_neo4j_requires_session(tmp_path, monkeypatch) -> None:
     client = _make_client(tmp_path, monkeypatch)
     r = client.post("/voiceprints/train-neo4j", json={"user_id": "alice"})
+    assert r.status_code == 401
+
+
+def test_train_neo4j_requires_neo4j_password(tmp_path, monkeypatch) -> None:
+    client = _make_client(tmp_path, monkeypatch)
+    client = _login(client)
+    r = client.post("/voiceprints/train-neo4j", json={"user_id": "alice"})
     assert r.status_code == 400
+
+
+def test_voiceprint_admin_endpoints_require_session(tmp_path, monkeypatch) -> None:
+    client = _make_client(tmp_path, monkeypatch)
+    cases = [
+        ("/voiceprints/link-speakers", {"data": {"user_id": "scott"}}),
+        ("/voiceprints/backfill-global-speakers", {"data": {}}),
+        ("/voiceprints/reconcile", {"data": {}}),
+        ("/voiceprints/train-neo4j", {"json": {"user_id": "alice"}}),
+    ]
+    for path, kwargs in cases:
+        r = client.post(path, **kwargs)
+        assert r.status_code == 401, path
 
 
 def test_voiceprints_status_lists_enrolled(tmp_path, monkeypatch) -> None:

@@ -43,6 +43,44 @@ def _validate_clip(path: str, audio: np.ndarray, sample_rate: int, min_seconds: 
     return {"duration_seconds": duration, "energy": energy}
 
 
+def _prune_outlier_embeddings(
+    embeddings: list[list[float]],
+    samples_meta: list[dict[str, Any]],
+    reference: np.ndarray | None = None,
+    threshold: float = 0.5,
+) -> tuple[list[list[float]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Drop enrollment clips whose embedding is far from the consensus.
+
+    Used before averaging so a single bad clip (noise, cross-talk, wrong
+    speaker) cannot poison the stored voiceprint mean. Returns the kept
+    embeddings, kept metadata, and the rejected metadata.
+    """
+    if len(embeddings) < 3:
+        return embeddings, samples_meta, []
+    arr = np.asarray(embeddings, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] == 0:
+        return embeddings, samples_meta, []
+    norms = np.linalg.norm(arr, axis=1)
+    safe = np.where(norms == 0, 1.0, norms)
+    unit = arr / safe[:, None]
+    if reference is None:
+        ref = np.median(unit, axis=0)
+    else:
+        ref = np.asarray(reference, dtype=float)
+    ref_norm = np.linalg.norm(ref)
+    if ref_norm == 0:
+        return embeddings, samples_meta, []
+    ref = ref / ref_norm
+    sims = unit @ ref
+    keep = sims >= threshold
+    if not keep.any():
+        return embeddings, samples_meta, []
+    kept_emb = [e for e, k in zip(embeddings, keep, strict=True) if k]
+    kept_meta = [m for m, k in zip(samples_meta, keep, strict=True) if k]
+    rejected = [m for m, k in zip(samples_meta, keep, strict=True) if not k]
+    return kept_emb, kept_meta, rejected
+
+
 def enroll_from_files(
     config: AppConfig,
     user_id: str,
@@ -88,6 +126,9 @@ def enroll_from_files(
         samples_meta.extend(existing_samples)
         legacy_mean_preserved = True
 
+    baseline_embeddings = list(embeddings)
+    baseline_meta = list(samples_meta)
+
     for path in files:
         try:
             sha256 = _fingerprint_file(path)
@@ -112,6 +153,21 @@ def enroll_from_files(
         except Exception as exc:
             errors.append({"path": path, "error": str(exc)})
 
+    rejected_outliers: list[dict[str, Any]] = []
+    new_embeddings = embeddings[len(baseline_embeddings):]
+    if len(new_embeddings) >= 3:
+        reference = (
+            np.mean(np.asarray(baseline_embeddings, dtype=float), axis=0)
+            if baseline_embeddings
+            else None
+        )
+        kept_new, kept_new_meta, rejected = _prune_outlier_embeddings(
+            new_embeddings, samples_meta[len(baseline_meta):], reference=reference
+        )
+        rejected_outliers = rejected
+        embeddings = baseline_embeddings + kept_new
+        samples_meta = baseline_meta + kept_new_meta
+
     if not embeddings:
         raise EnrollmentError("No usable voice clips were available for enrollment")
 
@@ -124,6 +180,7 @@ def enroll_from_files(
         "updated_ts_ms": now_ms(),
         "errors": errors,
         "legacy_mean_preserved": legacy_mean_preserved,
+        "rejected_outliers": [r.get("path", "<stored>") for r in rejected_outliers],
     }
 
     saved_record = (
@@ -160,6 +217,7 @@ def enroll_from_files(
         "appended": append,
         "threshold": config.auth.threshold,
         "legacy_mean_preserved": legacy_mean_preserved,
+        "rejected_outliers": [r.get("path", "<stored>") for r in rejected_outliers],
         "errors": errors,
         "speaker_linkage": saved_record.get("speaker_linkage"),
         "graph_saved": bool(saved_record.get("graph_saved") or saved_record.get("captured_in_graph")),
