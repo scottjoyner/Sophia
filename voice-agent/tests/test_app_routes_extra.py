@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from voice_agent.config import AppConfig, PathsConfig
+from voice_agent.config import AppConfig, PathsConfig, load_config
 from voice_agent.server.app import create_app
 from voice_agent.util.audio import write_wav
 
@@ -220,6 +220,27 @@ def test_dispatch_to_assistx_requires_session(tmp_path, monkeypatch) -> None:
     client = _make_client(tmp_path, monkeypatch)
     r = client.post("/dispatch/to-assistx", json={"event_type": "task_created", "text": "do thing"})
     assert r.status_code == 401
+
+
+def test_enroll_requires_token_when_configured(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SOPHIA_ENROLLMENT_TOKEN", "enroll-secret")
+    config = load_config(None)
+    config.paths = config.paths.model_copy(
+        update={
+            "artifacts_dir": str(tmp_path / "runs"),
+            "workspace_dir": str(tmp_path / "workspace"),
+            "capture_dir": str(tmp_path / "captures"),
+        }
+    )
+    client = TestClient(create_app(config))
+    wav = _wav_bytes(tmp_path / "voice.wav")
+    files = {"audio": ("voice.wav", wav, "audio/wav")}
+    r = client.post("/voiceprints/enroll", files=files, data={"user_id": "alice"})
+    assert r.status_code == 401
+    r2 = client.post(
+        "/voiceprints/enroll", files=files, data={"user_id": "alice", "enrollment_token": "enroll-secret"}
+    )
+    assert r2.status_code == 200
 
 
 def test_dispatch_trace_returns_correlation(tmp_path, monkeypatch) -> None:

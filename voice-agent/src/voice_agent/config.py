@@ -15,6 +15,8 @@ class AuthConfig(BaseModel):
     owner_override_enabled: bool = False
     owner_override_token: str | None = None
     owner_override_token_file: str | None = None
+    enrollment_token: str | None = None
+    enrollment_token_file: str | None = None
     owner_append_min_seconds: float = 2.0
     owner_append_max_seconds: float = 30.0
     global_speaker_link_enabled: bool = True
@@ -213,6 +215,10 @@ def _apply_env(config: AppConfig) -> AppConfig:
         auth_update["owner_override_token"] = os.environ["SOPHIA_OWNER_OVERRIDE_TOKEN"]
     if os.getenv("SOPHIA_OWNER_OVERRIDE_TOKEN_FILE"):
         auth_update["owner_override_token_file"] = os.environ["SOPHIA_OWNER_OVERRIDE_TOKEN_FILE"]
+    if os.getenv("SOPHIA_ENROLLMENT_TOKEN"):
+        auth_update["enrollment_token"] = os.environ["SOPHIA_ENROLLMENT_TOKEN"]
+    if os.getenv("SOPHIA_ENROLLMENT_TOKEN_FILE"):
+        auth_update["enrollment_token_file"] = os.environ["SOPHIA_ENROLLMENT_TOKEN_FILE"]
     if os.getenv("SOPHIA_OWNER_APPEND_MIN_SECONDS"):
         auth_update["owner_append_min_seconds"] = float(os.environ["SOPHIA_OWNER_APPEND_MIN_SECONDS"])
     if os.getenv("SOPHIA_OWNER_APPEND_MAX_SECONDS"):
@@ -244,4 +250,8 @@ def _apply_env(config: AppConfig) -> AppConfig:
         token = _read_secret_file(config.auth.owner_override_token_file)
         if token:
             config.auth = config.auth.model_copy(update={"owner_override_token": token})
+    if config.auth.enrollment_token is None and config.auth.enrollment_token_file:
+        token = _read_secret_file(config.auth.enrollment_token_file)
+        if token:
+            config.auth = config.auth.model_copy(update={"enrollment_token": token})
     return config

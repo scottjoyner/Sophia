@@ -2167,7 +2167,12 @@ def create_app(config: AppConfig) -> FastAPI:
         user_id: str = Form(default="default"),
         force: bool = Form(default=False),
         device_id: str = Form(default=""),
+        enrollment_token: str = Form(default=""),
     ) -> dict[str, Any]:
+        expected_enroll = config.auth.enrollment_token
+        if expected_enroll:
+            if not enrollment_token or not hmac.compare_digest(str(enrollment_token), str(expected_enroll)):
+                raise HTTPException(status_code=401, detail="Invalid or missing enrollment token.")
         enroll_dir = Path(config.paths.capture_dir or (Path(config.paths.artifacts_dir) / "captures")) / "voiceprint_enroll"
         enroll_dir.mkdir(parents=True, exist_ok=True)
         suffix = _safe_upload_suffix(audio, default=".webm")
