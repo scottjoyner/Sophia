@@ -30,6 +30,7 @@ def _app(monkeypatch, tmp_path: Path) -> TestClient:
 
 def test_dispatch_to_assistx_uses_env_base_and_secret(monkeypatch, tmp_path):
     client = _app(monkeypatch, tmp_path)
+    client.post("/auth/login", json={"passphrase": "sophia"})
     captured: dict[str, object] = {}
 
     monkeypatch.setattr("voice_agent.server.assistx_dispatch.ASSISTX_VOICE_WEBHOOK_BASE_URL", "http://assistant.local:8000")

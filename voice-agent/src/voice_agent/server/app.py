@@ -2759,7 +2759,8 @@ def create_app(config: AppConfig) -> FastAPI:
         }
 
     @app.post("/dispatch/to-assistx")
-    async def dispatch_to_assistx_route(req: DispatchRequest) -> dict[str, Any]:
+    async def dispatch_to_assistx_route(request: Request, req: DispatchRequest) -> dict[str, Any]:
+        require_session(request)
         metadata = req.metadata if req.metadata and any(k for k in req.metadata if req.metadata[k]) else None
         actor = {
             "user_id": (metadata or {}).get("user_id", "scott"),

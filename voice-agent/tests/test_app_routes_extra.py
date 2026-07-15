@@ -210,9 +210,16 @@ def test_dispatch_status_keys(tmp_path, monkeypatch) -> None:
 
 def test_dispatch_to_assistx_route(tmp_path, monkeypatch) -> None:
     client = _make_client(tmp_path, monkeypatch)
+    client = _login(client)
     r = client.post("/dispatch/to-assistx", json={"event_type": "task_created", "text": "do thing"})
     assert r.status_code == 200
     assert "event_id" in r.json()
+
+
+def test_dispatch_to_assistx_requires_session(tmp_path, monkeypatch) -> None:
+    client = _make_client(tmp_path, monkeypatch)
+    r = client.post("/dispatch/to-assistx", json={"event_type": "task_created", "text": "do thing"})
+    assert r.status_code == 401
 
 
 def test_dispatch_trace_returns_correlation(tmp_path, monkeypatch) -> None:
