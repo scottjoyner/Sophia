@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def collect_audio_paths_from_neo4j(
@@ -118,6 +121,7 @@ def save_capture_to_neo4j(
     duration_ms: int | None = None,
     metadata: dict[str, Any] | None = None,
     context: dict[str, Any] | None = None,
+    outbox: Any | None = None,
 ) -> None:
     try:
         from neo4j import GraphDatabase
@@ -131,7 +135,6 @@ def save_capture_to_neo4j(
     capture_dedupe_key = f"client:{client_capture_id}" if client_capture_id else f"server:{capture_id}"
     transcript_id = f"{capture_dedupe_key}:transcript"
 
-    driver = GraphDatabase.driver(uri, auth=(user, password))
     query = """
     MERGE (speaker:Speaker {user_id: $user_id})
       ON CREATE SET speaker.name = $user_id,
@@ -197,37 +200,61 @@ def save_capture_to_neo4j(
     )
     """
 
-    with driver.session(database=database) as session:
-        context = context or {}
-        session.run(
-            query,
-            user_id=user_id,
-            capture_id=capture_id,
-            client_capture_id=client_capture_id,
-            capture_dedupe_key=capture_dedupe_key,
-            transcript_id=transcript_id,
-            transcript=transcript,
-            audio_path=audio_path,
-            content_type=content_type,
-            duration_ms=duration_ms,
-            metadata_json=json.dumps(metadata, ensure_ascii=False),
-            context_json=json.dumps(context, ensure_ascii=False),
-            device_id=str(context.get("device_id") or ""),
-            device_fingerprint=str(context.get("device_fingerprint") or ""),
-            client_ip=str(context.get("client_ip") or ""),
-            user_agent=str(context.get("user_agent") or ""),
-            language=str(context.get("language") or ""),
-            timezone=str(context.get("timezone") or ""),
-            platform=str(context.get("platform") or ""),
-            location_lat=context.get("location_lat"),
-            location_lng=context.get("location_lng"),
-            location_accuracy_m=context.get("location_accuracy_m"),
-            activity_context=str(context.get("activity_context") or ""),
-            intent=str(context.get("intent") or ""),
-            intent_confidence=context.get("intent_confidence"),
-            intent_source=str(context.get("intent_source") or ""),
-        )
-    driver.close()
+    try:
+        driver = GraphDatabase.driver(uri, auth=(user, password))
+        with driver.session(database=database) as session:
+            context = context or {}
+            session.run(
+                query,
+                user_id=user_id,
+                capture_id=capture_id,
+                client_capture_id=client_capture_id,
+                capture_dedupe_key=capture_dedupe_key,
+                transcript_id=transcript_id,
+                transcript=transcript,
+                audio_path=audio_path,
+                content_type=content_type,
+                duration_ms=duration_ms,
+                metadata_json=json.dumps(metadata, ensure_ascii=False),
+                context_json=json.dumps(context, ensure_ascii=False),
+                device_id=str(context.get("device_id") or ""),
+                device_fingerprint=str(context.get("device_fingerprint") or ""),
+                client_ip=str(context.get("client_ip") or ""),
+                user_agent=str(context.get("user_agent") or ""),
+                language=str(context.get("language") or ""),
+                timezone=str(context.get("timezone") or ""),
+                platform=str(context.get("platform") or ""),
+                location_lat=context.get("location_lat"),
+                location_lng=context.get("location_lng"),
+                location_accuracy_m=context.get("location_accuracy_m"),
+                activity_context=str(context.get("activity_context") or ""),
+                intent=str(context.get("intent") or ""),
+                intent_confidence=context.get("intent_confidence"),
+                intent_source=str(context.get("intent_source") or ""),
+            )
+        driver.close()
+    except Exception as exc:
+        if outbox is not None:
+            try:
+                outbox.enqueue(
+                    kind="capture",
+                    idempotency_key=capture_dedupe_key,
+                    payload={
+                        "user_id": user_id,
+                        "capture_id": capture_id,
+                        "transcript": transcript,
+                        "audio_path": audio_path,
+                        "content_type": content_type,
+                        "duration_ms": duration_ms,
+                        "metadata": metadata or {},
+                        "context": context or {},
+                    },
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                logger.warning("Neo4j capture write failed; enqueued to graph outbox: %s", exc)
+            except Exception as oe:  # pragma: no cover - defensive
+                logger.error("failed to enqueue capture to graph outbox: %s", oe)
+        raise
 
 
 def lookup_capture_by_client_capture_id(

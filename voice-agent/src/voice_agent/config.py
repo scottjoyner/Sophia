@@ -99,6 +99,14 @@ class RuntimeConfig(BaseModel):
     allow_hf_downloads: bool = False
 
 
+class ReconciliationConfig(BaseModel):
+    enabled: bool = True
+    interval_seconds: int = 60
+    graph_outbox_prune_days: int = 7
+    voiceprint_drift_sync: bool = True
+    task_outbox_sweep: bool = True
+
+
 class Neo4jConfig(BaseModel):
     uri: str = "bolt://host.docker.internal:7687"
     user: str = "neo4j"
@@ -118,6 +126,7 @@ class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     neo4j: Neo4jConfig = Field(default_factory=Neo4jConfig)
+    reconciliation: ReconciliationConfig = Field(default_factory=ReconciliationConfig)
 
 
 def load_config(path: str | None) -> AppConfig:

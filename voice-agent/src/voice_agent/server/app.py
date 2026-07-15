@@ -1803,10 +1803,20 @@ def create_app(config: AppConfig) -> FastAPI:
     app.state.events = bus
     app.state.meeting_tasks = meeting_tasks
     app.state.assistant = Assistant(config)
+    from ..server.graph_outbox import GraphOutbox
+    from ..server.reconciliation_supervisor import ReconciliationSupervisor
     from ..util.db import Database
 
     app.state.task_db = Database(Path(config.paths.artifacts_dir) / "results.sqlite")
     app.state.assistant.db = app.state.task_db
+    app.state.graph_outbox = GraphOutbox(Path(config.paths.artifacts_dir) / "results.sqlite")
+    app.state.registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite", config)
+    app.state.supervisor = ReconciliationSupervisor(
+        config,
+        task_db=app.state.task_db,
+        graph_outbox=app.state.graph_outbox,
+        registry=app.state.registry,
+    )
 
     import logging
 
@@ -2825,6 +2835,20 @@ def create_app(config: AppConfig) -> FastAPI:
         report["retry"] = dispatch_report
         return report
 
+    @app.get("/system/reconcile/status")
+    async def system_reconcile_status(request: Request) -> dict[str, Any]:
+        """Unified drift-style status across all reconciliation outboxes."""
+        require_session(request)
+        return app.state.supervisor.status()
+
+    @app.post("/system/reconcile")
+    async def system_reconcile_trigger(request: Request) -> dict[str, Any]:
+        """Manually trigger one reconciliation sweep across all outboxes."""
+        require_session(request)
+        result = await app.state.supervisor.run_once()
+        result["status"] = app.state.supervisor.status()
+        return result
+
     @app.websocket("/events")
     async def events_ws(websocket: WebSocket) -> None:
         await websocket.accept()
@@ -2877,6 +2901,18 @@ def create_app(config: AppConfig) -> FastAPI:
                     await websocket.send_text(json.dumps(protocol.encode("event", event_to_dict(event))))
         except WebSocketDisconnect:
             return
+
+    @app.on_event("startup")
+    async def _start_supervisor() -> None:
+        supervisor = getattr(app.state, "supervisor", None)
+        if supervisor is not None:
+            supervisor.start()
+
+    @app.on_event("shutdown")
+    async def _shutdown_supervisor() -> None:
+        supervisor = getattr(app.state, "supervisor", None)
+        if supervisor is not None:
+            supervisor.stop()
 
     return app
 
