@@ -85,6 +85,7 @@ class ModelDiscoverer:
         self._last_refresh = 0.0
         self._thread: Optional[threading.Thread] = None
         self._started = False
+        self._router_warned = False
 
     def _mark_used(self, ep: ModelEndpoint) -> None:
         self._last_used[ep.full_id] = time.time()
@@ -109,7 +110,11 @@ class ModelDiscoverer:
                     if node:
                         nodes.add(node)
         except Exception as exc:  # router optional; never block discovery
-            logger.warning("fleet: auto-router model list unavailable: %s", exc)
+            if not self._router_warned:
+                logger.warning("fleet: auto-router model list unavailable: %s", exc)
+                self._router_warned = True
+            else:
+                logger.debug("fleet: auto-router model list unavailable: %s", exc)
         return sorted(nodes)
 
     def _probe_node(self, node: str) -> List[ModelEndpoint]:

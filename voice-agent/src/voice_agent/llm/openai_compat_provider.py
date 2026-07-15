@@ -43,7 +43,7 @@ class OpenAICompatProvider(LLMProvider):
         self.timeout = timeout
         self.task_timeout = task_timeout or timeout
 
-    def complete(self, prompt: str) -> LLMResponse:
+    def complete(self, prompt: str, timeout: float | None = None) -> LLMResponse:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -53,7 +53,7 @@ class OpenAICompatProvider(LLMProvider):
                 {"role": "user", "content": prompt},
             ],
         }
-        resp = requests.post(f"{self.base_url}/v1/chat/completions", headers=headers, json=payload, timeout=self.task_timeout)
+        resp = requests.post(f"{self.base_url}/v1/chat/completions", headers=headers, json=payload, timeout=timeout if timeout is not None else self.task_timeout)
         resp.raise_for_status()
         try:
             data = resp.json()

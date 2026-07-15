@@ -36,6 +36,8 @@ from .assistx_dispatch import (
     assistx_webhook_url as _assistx_voice_webhook_url,
     build_voice_event,
     dispatch_to_assistx,
+    json_dumps,
+    sign_headers,
 )
 from .rate_limits import install_rate_limiter
 from .assistant import Assistant
@@ -2694,16 +2696,18 @@ def create_app(config: AppConfig) -> FastAPI:
 
         base = _assistx_voice_base_url()
         webhook_url = _assistx_voice_webhook_url(base)
+        secret = ASSISTX_VOICE_WEBHOOK_SECRET
         assistx_reachable = False
         webhook_status = None
         webhook_error = None
         try:
-            r = httpx.post(
-                webhook_url,
-                content=b"{}",
-                headers={"Content-Type": "application/json"},
-                timeout=3,
-            )
+            # Probe with a real, signed, benign event so the indicator actually
+            # reflects whether AssistX accepts our webhook (auth + schema),
+            # instead of a bogus empty body that always 422s.
+            probe = build_voice_event("task_created", text="sophia webhook connectivity probe", auto_dispatch=False)
+            body = json_dumps(probe)
+            headers = sign_headers(secret, body) if secret else {"Content-Type": "application/json"}
+            r = httpx.post(webhook_url, content=body, headers=headers, timeout=5)
             webhook_status = r.status_code
             assistx_reachable = r.status_code != 404
         except Exception as exc:

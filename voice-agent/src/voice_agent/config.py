@@ -58,6 +58,7 @@ class LLMConfig(BaseModel):
     task_model: Optional[str] = None
     timeout: float = 60.0
     task_timeout: Optional[float] = None
+    task_extract_timeout: Optional[float] = None
     fleet_discovery: bool = False
     fleet_node_port: int = 1234
     fleet_router_url: Optional[str] = None
@@ -180,6 +181,8 @@ def _apply_env(config: AppConfig) -> AppConfig:
         llm_update["timeout"] = float(os.environ["SOPHIA_LLM_TIMEOUT"])
     if os.getenv("SOPHIA_TASK_TIMEOUT"):
         llm_update["task_timeout"] = float(os.environ["SOPHIA_TASK_TIMEOUT"])
+    if os.getenv("SOPHIA_TASK_EXTRACT_TIMEOUT"):
+        llm_update["task_extract_timeout"] = float(os.environ["SOPHIA_TASK_EXTRACT_TIMEOUT"])
     if os.getenv("SOPHIA_FLEET_DISCOVERY"):
         llm_update["fleet_discovery"] = os.environ["SOPHIA_FLEET_DISCOVERY"].lower() in {"1", "true", "yes", "on"}
     if os.getenv("SOPHIA_FLEET_NODE_PORT"):

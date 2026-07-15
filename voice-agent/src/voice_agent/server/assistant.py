@@ -35,6 +35,8 @@ class Assistant:
         self.provider = self._build_provider()
         self.discoverer = None
         self._provider_cache: Dict[str, LLMProvider] = {}
+        self._failed_endpoints: Dict[str, float] = {}
+        self._endpoint_cooldown = 120.0
         if getattr(config.llm, "fleet_discovery", False):
             self._init_fleet()
 
@@ -75,16 +77,33 @@ class Assistant:
             self._provider_cache[key] = cached
         return cached
 
+    def _mark_failed(self, ep) -> None:
+        if ep is not None:
+            self._failed_endpoints[ep.full_id] = time.time()
+
+    def _cooling(self, ep) -> bool:
+        ts = self._failed_endpoints.get(ep.full_id)
+        return ts is not None and (time.time() - ts) < self._endpoint_cooldown
+
     def _candidate_endpoints(self, kind: str):
         """Ordered fleet endpoints to try for a workload, best first.
 
         Chat-suited models (small/fast, idle-preferring) or task-suited models
         (large, idle-preferring) are returned so a single stale/unloaded model
-        never breaks the chat — the caller retries the next candidate. Returns
-        ``None`` when discovery is disabled (use the configured provider)."""
+        never breaks the chat — the caller retries the next candidate. Endpoints
+        that just failed are skipped (cooldown) so retries don't immediately
+        re-hit a dead/slow model. Returns ``None`` when discovery is disabled
+        or currently empty (caller falls back to the configured provider)."""
         if not self.discoverer:
             return None
         eps = [e for e in self.discoverer.endpoints() if not e.is_embedding]
+        if not eps:
+            # Transient empty fleet (e.g. all nodes briefly unreachable) — force
+            # one rediscovery before giving up so we self-heal instead of failing.
+            try:
+                eps = [e for e in self.discoverer.discover(force=True) if not e.is_embedding]
+            except Exception:
+                eps = []
         if not eps:
             return None
         now = time.time()
@@ -94,7 +113,9 @@ class Assistant:
         else:
             cands = [e for e in eps if e.params >= self.discoverer.task_min_params] or eps
             cands.sort(key=lambda e: (e.params, self.discoverer._idle_score(e, now)), reverse=True)
-        return cands
+        # Skip endpoints in cooldown unless that would leave us with nothing.
+        usable = [e for e in cands if not self._cooling(e)]
+        return usable or cands
 
     def _build_provider(self) -> LLMProvider:
         llm = self.config.llm
@@ -199,6 +220,7 @@ class Assistant:
                 self.discoverer._mark_used(ep)
                 return
             except Exception as exc:
+                self._mark_failed(ep)
                 logger.warning("chat candidate %s failed: %s; trying next", ep.full_id, exc)
                 continue
         raise LLMProviderError("all chat endpoints failed")
@@ -207,15 +229,26 @@ class Assistant:
         if not conversation.strip():
             return []
         prompt = TASK_EXTRACTION_PROMPT.replace("{conversation}", conversation)
-        eps = self._candidate_endpoints("task")
-        providers = [self._provider_for(ep) or self.provider for ep in eps] if eps else [self.provider]
-        for i, provider in enumerate(providers):
+        # Task extraction is a short structured-JSON call. Prefer the largest
+        # (heaviest) model for best quality, but fail fast and degrade to a
+        # chat-sized model if the big one is cold/unreachable, so extraction
+        # always produces something instead of hanging or returning nothing.
+        extract_timeout = self.config.llm.task_extract_timeout or 30
+        task_eps = self._candidate_endpoints("task") or []
+        chat_eps = self._candidate_endpoints("chat") or []
+        pairs = [(ep, self._provider_for(ep) or self.provider) for ep in task_eps]
+        pairs += [(ep, self._provider_for(ep) or self.provider) for ep in chat_eps]
+        if not pairs:
+            pairs = [(None, self.provider)]
+        for ep, provider in pairs:
             try:
-                raw = provider.complete(prompt).content
-                if eps:
-                    self.discoverer._mark_used(eps[i])
+                raw = provider.complete(prompt, timeout=extract_timeout).content
+                if ep is not None:
+                    self.discoverer._mark_used(ep)
                 return _parse_task_list(raw)
             except Exception as exc:
+                if ep is not None:
+                    self._mark_failed(ep)
                 logger.warning("task candidate failed: %s; trying next", exc)
                 continue
         return []
