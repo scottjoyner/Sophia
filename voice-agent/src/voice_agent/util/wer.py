@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from typing import List, Tuple
-
 from .textnorm import normalize
 
 
-def _edit_distance(ref: List[str], hyp: List[str]) -> int:
+def _edit_distance(ref: list[str], hyp: list[str]) -> int:
     dp = [[0] * (len(hyp) + 1) for _ in range(len(ref) + 1)]
     for i in range(len(ref) + 1):
         dp[i][0] = i
@@ -38,7 +36,7 @@ def cer(ref: str, hyp: str) -> float:
     return _edit_distance(ref_chars, hyp_chars) / len(ref_chars)
 
 
-def partial_churn(partials: List[str]) -> float:
+def partial_churn(partials: list[str]) -> float:
     if len(partials) < 2:
         return 0.0
     total = 0

@@ -5,10 +5,8 @@ import hmac
 import os
 import secrets
 import time
-from typing import Optional
 
-from fastapi import Cookie, HTTPException, Request
-
+from fastapi import HTTPException, Request
 
 SESSION_COOKIE = "sophia_session"
 SESSION_TTL_SECONDS = 60 * 60 * 12  # 12 hours
@@ -38,7 +36,7 @@ def create_session_token() -> str:
     return f"{body}.{sig}"
 
 
-def verify_session_token(token: Optional[str]) -> bool:
+def verify_session_token(token: str | None) -> bool:
     if not token or token.count(".") != 2:
         return False
     try:
@@ -52,7 +50,7 @@ def verify_session_token(token: Optional[str]) -> bool:
     return hmac.compare_digest(expected, sig)
 
 
-def login(passphrase: str) -> Optional[str]:
+def login(passphrase: str) -> str | None:
     expected = _app_password()
     if not expected:
         return None

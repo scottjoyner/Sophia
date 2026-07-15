@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
-from typing import List
-
 
 DEFAULT_PHRASES = [
     "The quick brown fox jumps over the lazy dog",
@@ -12,7 +10,7 @@ DEFAULT_PHRASES = [
 ]
 
 
-def load_phrases(path: str | None) -> List[str]:
+def load_phrases(path: str | None) -> list[str]:
     if not path:
         return DEFAULT_PHRASES
     try:

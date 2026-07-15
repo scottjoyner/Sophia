@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from voice_agent.auth.verify import _compute_adaptive_threshold
 from voice_agent.auth.registry import _jsonable
+from voice_agent.auth.verify import _compute_adaptive_threshold
 from voice_agent.auth.voiceprint_graph import _neo4j_json
 from voice_agent.config import AppConfig, PathsConfig
 
@@ -72,9 +72,9 @@ def test_device_calibration_persists_and_averages(tmp_path: Path):
 
 @pytest.mark.skipif(not os.getenv("NEO4J_PASSWORD"), reason="Neo4j not configured in this environment")
 def test_global_speaker_linking_live(tmp_path: Path):
-    from voice_agent.auth.voiceprint_graph import VoiceprintGraphStore
-
     import numpy as np
+
+    from voice_agent.auth.voiceprint_graph import VoiceprintGraphStore
 
     config = AppConfig(
         paths=PathsConfig(artifacts_dir=str(tmp_path / "runs"), workspace_dir=str(tmp_path / "workspace")),

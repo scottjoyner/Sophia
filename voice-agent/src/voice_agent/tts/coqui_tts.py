@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -33,7 +32,6 @@ class CoquiTTS:
 
         # Patch TTS utils to handle PyTorch 2.12+ weights_only default change
         import TTS.utils.io as tts_io
-        import torch
         _orig_fsspec = tts_io.load_fsspec
         def _patched_fsspec(path, map_location=None, cache=True, **kw):
             kw.setdefault("weights_only", False)

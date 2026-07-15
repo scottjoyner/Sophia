@@ -4,15 +4,14 @@ import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from ..config import AppConfig
-
 
 VALID_PROTOCOLS = {"native_ws", "hermes_overlay_v1"}
 
 
-def _check_writable_dir(path: Path) -> Dict[str, Any]:
+def _check_writable_dir(path: Path) -> dict[str, Any]:
     try:
         path.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(dir=path, prefix=".sophia-ready-", delete=True) as fh:
@@ -23,7 +22,7 @@ def _check_writable_dir(path: Path) -> Dict[str, Any]:
         return {"ok": False, "path": str(path), "writable": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
-def _check_sqlite(path: Path) -> Dict[str, Any]:
+def _check_sqlite(path: Path) -> dict[str, Any]:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(path) as conn:
@@ -34,7 +33,7 @@ def _check_sqlite(path: Path) -> Dict[str, Any]:
         return {"ok": False, "path": str(path), "openable": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
-def build_readiness_report(config: AppConfig) -> Dict[str, Any]:
+def build_readiness_report(config: AppConfig) -> dict[str, Any]:
     artifacts_dir = Path(config.paths.artifacts_dir)
     capture_dir = Path(config.paths.capture_dir or (artifacts_dir / "captures"))
     registry_db = artifacts_dir / "results.sqlite"

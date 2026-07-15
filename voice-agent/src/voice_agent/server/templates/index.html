@@ -1,0 +1,1106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Sophia</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14;
+      --panel: #111821;
+      --panel-2: #0f172a;
+      --border: #253140;
+      --border-2: #2e3947;
+      --text: #f4f7fb;
+      --muted: #9aa7b6;
+      --muted-2: #64748b;
+      --accent: #7dd3fc;
+      --green: #34d399;
+      --amber: #fbbf24;
+      --red: #fb7185;
+      --radius: 12px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body { background: var(--bg); color: var(--text); min-height: 100vh; }
+
+    button { font: inherit; cursor: pointer; border: 0; border-radius: 10px; padding: 11px 15px; font-weight: 600; min-height: 44px; transition: opacity .15s, background .15s, border-color .15s; }
+    button:disabled { opacity: .4; cursor: default; }
+    button.primary { background: var(--accent); color: #061014; }
+    button.primary:hover:not(:disabled) { background: #67c5f0; }
+    button.ghost { background: var(--panel-2); border: 1px solid var(--border-2); color: var(--text); }
+    button.ghost:hover:not(:disabled) { background: #29394f; }
+    button.warn { background: var(--amber); color: #1c1900; }
+    button.danger { background: var(--red); color: #23060a; }
+    input, textarea, select { font: inherit; width: 100%; border: 1px solid var(--border-2); border-radius: 10px; background: #071019; color: var(--text); padding: 11px 12px; }
+    input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+    label { display: block; color: var(--muted); font-size: 12px; margin: 10px 0 6px; font-weight: 500; }
+    .hidden { display: none !important; }
+
+    /* ---- Login ---- */
+    #login { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px; background: radial-gradient(1200px 600px at 50% -10%, #16202c, var(--bg)); z-index: 100; }
+    .login-card { width: min(100%, 380px); background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 28px; box-shadow: 0 24px 60px rgba(0,0,0,.45); }
+    .login-card h1 { margin: 0 0 4px; font-size: 24px; letter-spacing: -.02em; }
+    .login-card h1 span { color: var(--accent); }
+    .login-card p { margin: 0 0 18px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .login-error { color: var(--red); font-size: 13px; min-height: 18px; margin-top: 10px; }
+    .voice-row { display: flex; gap: 8px; align-items: stretch; }
+    .mic-btn { flex: 0 0 auto; min-width: 54px; font-size: 20px; background: var(--panel-2); border: 1px solid var(--border-2); color: var(--text); }
+    .mic-btn.rec { box-shadow: 0 0 0 2px var(--red); }
+    .divider { display: flex; align-items: center; gap: 8px; margin: 14px 0; color: var(--muted-2); font-size: 12px; }
+    .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+    /* ---- App shell ---- */
+    #app { display: none; height: 100vh; flex-direction: column; }
+    header.topbar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 20; flex-wrap: wrap; }
+    .brand { font-weight: 700; font-size: 17px; letter-spacing: -.02em; display: flex; align-items: center; gap: 8px; }
+    .brand span { color: var(--accent); }
+    .live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); display: inline-block; }
+    .live-dot.on { background: var(--green); box-shadow: 0 0 8px var(--green); }
+    .pills { display: flex; gap: 7px; margin-left: auto; flex-wrap: wrap; }
+    .pill { border-radius: 999px; padding: 6px 11px; font-size: 12px; border: 1px solid var(--border-2); background: var(--panel-2); color: var(--muted); white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+    .pill.ok { border-color: var(--green); color: #6ee7b7; }
+    .pill.bad { border-color: var(--red); color: #fda4af; }
+    .pill.warn { border-color: var(--amber); color: #fcd34d; }
+    .pill button { background: none; border: 0; color: inherit; font: inherit; min-height: 0; padding: 0; }
+
+    .layout { flex: 1; display: grid; grid-template-columns: 200px 1fr 340px; min-height: 0; }
+    @media (max-width: 1080px) { .layout { grid-template-columns: 1fr; } #nav { display: none; } #inbox { display: none; } #inbox.show { display: flex; } }
+    #nav { border-right: 1px solid var(--border); background: var(--panel); padding: 12px 8px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
+    .nav-item { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 10px; color: var(--muted); background: transparent; border: 0; text-align: left; font-weight: 600; font-size: 13px; }
+    .nav-item .ico { font-size: 16px; }
+    .nav-item:hover { background: var(--panel-2); color: var(--text); }
+    .nav-item.active { background: var(--panel-2); color: var(--text); box-shadow: inset 3px 0 0 var(--accent); }
+
+    .main { display: flex; flex-direction: column; min-height: 0; }
+    .panel { display: none; flex: 1; min-height: 0; flex-direction: column; }
+    .panel.active { display: flex; }
+    .panel-scroll { overflow-y: auto; flex: 1; padding: 18px; }
+    .panel h2 { margin: 0 0 4px; font-size: 17px; }
+    .panel .sub { color: var(--muted-2); font-size: 12px; margin: 0 0 14px; }
+    .card { border: 1px solid var(--border); background: var(--panel-2); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 560px) { .row { grid-template-columns: 1fr; } }
+
+    /* ---- Chat ---- */
+    .messages { flex: 1; overflow-y: auto; padding: 18px 16px; display: flex; flex-direction: column; gap: 12px; }
+    .msg { max-width: 80%; padding: 12px 14px; border-radius: 14px; line-height: 1.5; font-size: 14px; white-space: pre-wrap; word-wrap: break-word; }
+    .msg.user { align-self: flex-end; background: linear-gradient(180deg, #1e3a4d, #16303f); border: 1px solid #2c4a5e; }
+    .msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); }
+    .msg .caret { display: inline-block; width: 8px; height: 16px; background: var(--accent); margin-left: 2px; vertical-align: -3px; animation: blink 1s steps(2) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    .meta-note { color: var(--muted-2); font-size: 11px; padding: 0 16px 6px; }
+    .composer { border-top: 1px solid var(--border); padding: 12px 16px; background: var(--panel); display: flex; gap: 10px; align-items: flex-end; }
+    .composer textarea { resize: none; min-height: 44px; max-height: 140px; }
+
+    /* ---- Inbox ---- */
+    #inbox { border-left: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+    #inbox h2 { margin: 0; padding: 14px 16px; font-size: 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+    #inbox h2 .count { margin-left: auto; font-size: 12px; color: var(--muted); }
+    .task-list { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .task { border: 1px solid var(--border); background: var(--panel-2); border-radius: 10px; padding: 12px; }
+    .task .t-head { display: flex; align-items: center; gap: 8px; }
+    .task .t-title { font-weight: 600; font-size: 14px; }
+    .task .prio { font-size: 10px; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; font-weight: 700; letter-spacing: .04em; }
+    .prio.low { background: #102018; color: #6ee7b7; }
+    .prio.medium { background: #1f1a0a; color: #fcd34d; }
+    .prio.high { background: #2a0a14; color: #fda4af; }
+    .task .t-desc { color: var(--muted); font-size: 12px; margin-top: 6px; line-height: 1.4; }
+    .task .t-status { margin-top: 8px; font-size: 11px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+    .badge.extracted { background: #1e293b; color: #cbd5e1; }
+    .badge.ingesting { background: #1f1a0a; color: #fcd34d; }
+    .badge.ingested { background: #0a2a1a; color: #6ee7b7; }
+    .badge.failed { background: #2a0a14; color: #fda4af; }
+    .badge.assigned { background: #10243a; color: #7dd3fc; }
+    .task .t-meta { color: var(--muted-2); font-size: 11px; }
+
+    /* ---- Voice ---- */
+    .voice-strip { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; }
+    .voice-strip .voice-status { font-size: 12px; color: var(--muted); flex-basis: 100%; margin: 0; }
+    .voice-status.ok { color: #6ee7b7; }
+    .voice-status.bad { color: #fda4af; }
+    .voice-status.link { color: #7dd3fc; }
+    .health-card { border: 1px solid var(--border); background: var(--panel-2); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+    .health-card .hc-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+    .health-card .hc-row { font-size: 12px; color: var(--muted); margin: 3px 0; }
+    .link-item { font-size: 12px; padding: 6px 8px; border-left: 3px solid var(--accent); background: #0f172a; border-radius: 0 6px 6px 0; margin: 4px 0; }
+    .link-item .li-score { color: var(--muted-2); }
+
+    /* ---- Capture ---- */
+    .rec-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted-2); }
+    .rec-dot.live { background: var(--red); box-shadow: 0 0 8px var(--red); animation: blink 1s steps(2) infinite; }
+    .meter { height: 8px; border-radius: 999px; background: #1e293b; overflow: hidden; margin-top: 10px; }
+    .meter > div { height: 100%; width: 0%; background: linear-gradient(90deg, #34d399, #7dd3fc); transition: width .12s linear; }
+    .hint { color: var(--muted-2); font-size: 12px; margin-top: 8px; line-height: 1.5; }
+    .result-line { font-size: 12px; padding: 8px 10px; border-radius: 8px; margin-top: 8px; }
+    .result-line.ok { background: #0a2a1a; color: #6ee7b7; }
+    .result-line.bad { background: #2a0a14; color: #fda4af; }
+
+    /* ---- Meetings ---- */
+    .seg { padding: 8px 10px; border-left: 3px solid var(--accent); margin: 6px 0; background: #0f172a; border-radius: 0 6px 6px 0; font-size: 13px; line-height: 1.45; }
+    .seg .spk { font-weight: 600; color: var(--accent); font-size: 12px; }
+    .meeting-item { font-size: 12px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; margin: 6px 0; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+    .meeting-item:hover { border-color: var(--accent); }
+    .meeting-item .del { color: var(--red); cursor: pointer; font-size: 16px; line-height: 1; }
+
+    /* ---- Dispatch ---- */
+    .dispatch-log .dl-item { font-size: 12px; padding: 6px 8px; border-left: 3px solid var(--green); background: #0f172a; border-radius: 0 6px 6px 0; margin: 4px 0; }
+    .dispatch-log .dl-item.failed { border-left-color: var(--red); }
+    .trace { font-size: 12px; line-height: 1.55; background: #071019; border: 1px solid var(--border); border-radius: 8px; padding: 10px; color: #cbd5e1; min-height: 40px; white-space: pre-wrap; }
+
+    #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #1e293b; border: 1px solid var(--border-2); color: var(--text); padding: 10px 16px; border-radius: 10px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 200; max-width: 90%; }
+    #toast.show { opacity: 1; }
+
+    /* Bottom nav for mobile */
+    #bottomnav { display: none; }
+    @media (max-width: 1080px) {
+      #bottomnav { display: flex; border-top: 1px solid var(--border); background: var(--panel); position: sticky; bottom: 0; z-index: 20; }
+      #bottomnav .nav-item { flex: 1; flex-direction: column; gap: 2px; font-size: 10px; border-radius: 0; padding: 8px 4px; align-items: center; }
+      #bottomnav .nav-item .ico { font-size: 18px; }
+      #bottomnav .nav-item.active { box-shadow: inset 0 3px 0 var(--accent); }
+    }
+  </style>
+</head>
+<body>
+  <!-- ============ LOGIN ============ -->
+  <div id="login">
+    <form class="login-card" id="loginForm">
+      <h1>Sophia <span>Console</span></h1>
+      <p>Your voice is the primary key. Speak to unlock — your passphrase is a fallback.</p>
+
+      <div class="voice-row">
+        <button class="mic-btn" id="loginMic" type="button" title="Hold to record">🎙</button>
+        <button class="primary" id="voiceLoginBtn" type="button" style="flex:1;">Unlock with voice</button>
+      </div>
+      <div id="voiceLoginStatus" class="login-error" style="margin-top:6px;color:var(--muted);">Hold 🎙 to record, then “Unlock with voice”.</div>
+
+      <div class="divider">or</div>
+
+      <div id="passRow">
+        <label for="pass">Passphrase (fallback)</label>
+        <input id="pass" type="password" autocomplete="current-password" placeholder="enter passphrase">
+        <button class="ghost" id="loginBtn" type="submit" style="width:100%;margin-top:12px;">Unlock with passphrase</button>
+      </div>
+      <div class="login-error" id="loginError"></div>
+    </form>
+  </div>
+
+  <!-- ============ APP ============ -->
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">Sophia <span>Console</span> <span id="liveDot" class="live-dot" title="live event stream"></span></div>
+      <div class="pills">
+        <div class="pill" id="netPill">net: …</div>
+        <div class="pill" id="modelPill">model: …</div>
+        <div class="pill" id="graphPill">graph: …</div>
+        <div class="pill" id="authPill">user: …</div>
+        <button class="pill" id="inboxToggle" title="Toggle task inbox">Tasks</button>
+        <button class="pill" id="logoutBtn" title="Lock console">Lock</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <nav id="nav">
+        <button class="nav-item active" data-tab="chat"><span class="ico">💬</span> Chat</button>
+        <button class="nav-item" data-tab="voice"><span class="ico">🎙</span> Voice</button>
+        <button class="nav-item" data-tab="capture"><span class="ico">📝</span> Capture</button>
+        <button class="nav-item" data-tab="meetings"><span class="ico">📅</span> Meetings</button>
+        <button class="nav-item" data-tab="dispatch"><span class="ico">📤</span> Dispatch</button>
+      </nav>
+
+      <div class="main">
+        <!-- CHAT -->
+        <section class="panel active" data-panel="chat">
+          <div class="messages" id="messages"></div>
+          <div class="meta-note" id="chatMeta"></div>
+          <div class="composer">
+            <textarea id="composer" rows="1" placeholder="Message Sophia…"></textarea>
+            <button class="primary" id="sendBtn" type="button">Send</button>
+          </div>
+        </section>
+
+        <!-- VOICE -->
+        <section class="panel" data-panel="voice">
+          <div class="panel-scroll">
+            <h2>Voice Identity</h2>
+            <p class="sub">Verify who is speaking, enroll new speakers, and strengthen the owner voiceprint.</p>
+            <div class="voice-strip">
+              <button class="mic-btn" id="micBtn" type="button" title="Hold to record a voice check">🎙</button>
+              <input id="adminKey" type="password" placeholder="owner override key" autocomplete="off" style="flex:1;min-width:120px;">
+              <button class="ghost" id="verifyBtn" type="button">Verify voice</button>
+              <button class="warn" id="overrideBtn" type="button" title="Rejected? Add this clip and retrain the speaker embedding">Override &amp; retrain</button>
+              <span id="voiceStatus" class="voice-status">Hold 🎙 to record, then Verify.</span>
+            </div>
+            <div class="voice-strip">
+              <input id="enrollName" placeholder="new speaker name (user id)" style="flex:1;min-width:120px;">
+              <button class="primary" id="enrollBtn" type="button">Enroll new speaker</button>
+              <span id="enrollStatus" class="voice-status"></span>
+            </div>
+            <div class="voice-strip">
+              <button class="ghost" id="backfillBtn" type="button" title="Re-link all enrolled voiceprints into the global Speaker pool">Backfill global speakers</button>
+              <span id="backfillStatus" class="voice-status"></span>
+            </div>
+            <div id="voiceHealth"></div>
+          </div>
+        </section>
+
+        <!-- CAPTURE -->
+        <section class="panel" data-panel="capture">
+          <div class="panel-scroll">
+            <h2>Capture &amp; Memory</h2>
+            <p class="sub">Record or upload audio, transcribe it, and save it to the Scott memory graph.</p>
+
+            <div class="card">
+              <div class="rec-controls">
+                <button class="primary" id="capRecordBtn" type="button">● Record</button>
+                <span class="rec-dot" id="capRecDot"></span>
+                <span id="capRecState" style="font-size:12px;color:var(--muted);">idle</span>
+                <input id="capFile" type="file" accept="audio/*" style="flex:1;min-width:160px;">
+              </div>
+              <div class="meter"><div id="capMeter"></div></div>
+              <div id="capResult" class="result-line" style="display:none;"></div>
+              <label for="capTranscript">Transcript</label>
+              <textarea id="capTranscript" rows="4" placeholder="Speak or type what was said. Leave empty to auto-transcribe from audio."></textarea>
+              <label for="capContext">Context (where / what / why)</label>
+              <input id="capContext" placeholder="e.g. driving home, idea for project">
+              <div class="rec-controls" style="margin-top:12px;">
+                <button class="primary" id="capSaveBtn" type="button" disabled>Save to memory</button>
+                <button class="ghost" id="capClearBtn" type="button">Clear</button>
+                <span id="capSavedCount" style="font-size:12px;color:var(--muted-2);margin-left:auto;"></span>
+              </div>
+              <div class="hint" id="capHint">Recording is auto-transcribed server-side and written to Neo4j when configured. Uploaded audio is also accepted.</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- MEETINGS -->
+        <section class="panel" data-panel="meetings">
+          <div class="panel-scroll">
+            <h2>Meeting Mode</h2>
+            <p class="sub">Diarize, transcribe, and summarize multi-speaker audio, then dispatch to AssistX.</p>
+            <div class="card">
+              <label for="meetingFile">Upload meeting audio</label>
+              <input id="meetingFile" type="file" accept="audio/*,video/*">
+              <div class="row" style="margin-top:10px;align-items:end;">
+                <div>
+                  <label for="meetingMaxSpeakers" style="margin-top:0;">Max speakers</label>
+                  <select id="meetingMaxSpeakers">
+                    <option value="">auto</option><option value="2">2</option><option value="3">3</option>
+                    <option value="4">4</option><option value="5">5</option><option value="6">6</option>
+                  </select>
+                </div>
+                <button class="warn" id="processMeetingBtn" type="button" disabled>Process Meeting</button>
+              </div>
+              <div class="meter"><div id="meetingProgress"></div></div>
+              <div id="meetingStatus" class="hint">Upload an audio file to process.</div>
+              <div id="meetingResults" style="display:none;">
+                <div id="meetingTranscript" style="margin-top:10px;"></div>
+                <div id="meetingSummary" style="display:none;margin-top:10px;"><pre id="summaryText" style="max-height:300px;overflow:auto;background:#071019;border:1px solid var(--border);border-radius:8px;padding:10px;color:#cbd5e1;font-size:12px;white-space:pre-wrap;"></pre></div>
+                <button class="primary" id="dispatchMeetingBtn" type="button" style="margin-top:10px;" disabled>Dispatch to AssistX</button>
+              </div>
+            </div>
+            <h2 style="margin-top:18px;">Past Meetings</h2>
+            <div id="meetingHistory"></div>
+          </div>
+        </section>
+
+        <!-- DISPATCH -->
+        <section class="panel" data-panel="dispatch">
+          <div class="panel-scroll">
+            <h2>Auto-Assist Bridge</h2>
+            <p class="sub">Bridge voice events to AssistX (task-state authority).</p>
+            <div class="card">
+              <div class="row">
+                <div><label for="dispatchUrl" style="margin-top:0;">AssistX URL</label><input id="dispatchUrl" value="http://host.docker.internal:8000"></div>
+                <div><label for="dispatchToken" style="margin-top:0;">Webhook Secret</label><input id="dispatchToken" type="password" placeholder="optional"></div>
+              </div>
+              <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-top:10px;">
+                <input id="autoDispatchToggle" type="checkbox" style="width:auto;"> Auto-dispatch voice events to AssistX
+              </label>
+              <button class="ghost" id="saveDispatchConfigBtn" type="button" style="margin-top:8px;">Save Config</button>
+            </div>
+            <div class="card">
+              <h2 style="margin:0 0 10px;font-size:15px;">Send Event</h2>
+              <div class="row">
+                <div><label for="dispatchEventType" style="margin-top:0;">Event Type</label>
+                  <select id="dispatchEventType">
+                    <option value="voice_auth">voice_auth</option>
+                    <option value="meeting_transcript">meeting_transcript</option>
+                    <option value="task_created">task_created</option>
+                    <option value="ralph_iteration">ralph_iteration</option>
+                  </select>
+                </div>
+                <div><label for="dispatchAuto" style="margin-top:0;">Auto Dispatch</label>
+                  <select id="dispatchAuto"><option value="true">Yes</option><option value="false">No</option></select></div>
+              </div>
+              <label for="dispatchText">Event Text</label>
+              <textarea id="dispatchText" placeholder="Event payload text…" style="min-height:60px;"></textarea>
+              <button class="primary" id="dispatchSendBtn" type="button" style="margin-top:8px;">Send to AssistX</button>
+            </div>
+            <h2 style="margin-top:6px;">Execution Trace</h2>
+            <div id="executionTrace" class="trace">No dispatch yet.</div>
+            <h2 style="margin-top:12px;">Dispatch Log</h2>
+            <div id="dispatchLog" class="dispatch-log"></div>
+          </div>
+        </section>
+      </div>
+
+      <aside id="inbox">
+        <h2>📥 Task Inbox → AssistX <span class="count" id="taskCount">0</span></h2>
+        <div class="task-list" id="taskList">
+          <div style="color:var(--muted-2);font-size:13px;">No tasks yet. Tasks extracted from your conversations appear here and are auto-ingested into AssistX.</div>
+        </div>
+      </aside>
+    </div>
+
+    <nav id="bottomnav">
+      <button class="nav-item active" data-tab="chat"><span class="ico">💬</span> Chat</button>
+      <button class="nav-item" data-tab="voice"><span class="ico">🎙</span> Voice</button>
+      <button class="nav-item" data-tab="capture"><span class="ico">📝</span> Capture</button>
+      <button class="nav-item" data-tab="meetings"><span class="ico">📅</span> Meetings</button>
+      <button class="nav-item" data-tab="dispatch"><span class="ico">📤</span> Dispatch</button>
+    </nav>
+  </div>
+
+  <div id="toast"></div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const loginEl = $('login'), appEl = $('app');
+
+  // ---------- helpers ----------
+  function toast(msg, ms = 2600) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms);
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function el(id) { return document.getElementById(id); }
+
+  let isOffline = !navigator.onLine;
+  const offlineQueue = [];
+  function updateNetPill() {
+    const p = $('netPill');
+    if (isOffline) { p.className = 'pill bad'; p.textContent = 'net: offline' + (offlineQueue.length ? ' (' + offlineQueue.length + ' queued)' : ''); }
+    else { p.className = 'pill ok'; p.textContent = 'net: online'; }
+  }
+  function enqueueOffline(fn) { if (!offlineQueue.includes(fn)) offlineQueue.push(fn); updateNetPill(); }
+  async function flushOffline() {
+    if (!offlineQueue.length) return;
+    const pending = offlineQueue.splice(0, offlineQueue.length); updateNetPill();
+    for (const fn of pending) { try { await fn(); } catch {} }
+  }
+  window.addEventListener('offline', () => { isOffline = true; updateNetPill(); });
+  window.addEventListener('online', () => { isOffline = false; updateNetPill(); flushOffline(); });
+  updateNetPill();
+
+  async function api(path, opts = {}) {
+    try {
+      const r = await fetch(path, { credentials: 'same-origin', ...opts });
+      if (isOffline) { isOffline = false; updateNetPill(); }
+      return r;
+    } catch (err) {
+      if (!isOffline) { isOffline = true; updateNetPill(); }
+      throw err;
+    }
+  }
+
+  // ---------- state ----------
+  const state = {
+    session: {},
+    history: [],
+    streaming: false,
+    recorder: null,
+    micStream: null,
+    micChunks: [],
+    lastVoiceBlob: null,
+    lastMeetingResult: null,
+    lastEventId: 0,
+  };
+
+  // ---------- navigation ----------
+  function goTab(tab) {
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.dataset.panel === tab));
+    if (tab === 'voice') refreshVoiceHealth();
+    if (tab === 'meetings') loadMeetingHistory();
+    if (tab === 'dispatch') refreshDispatchStatus();
+  }
+  document.querySelectorAll('.nav-item').forEach(btn => btn.addEventListener('click', () => goTab(btn.dataset.tab)));
+  $('inboxToggle').addEventListener('click', () => $('inbox').classList.toggle('show'));
+
+  // ---------- boot ----------
+  async function boot() {
+    try {
+      const r = await api('/auth/session');
+      const d = await r.json();
+      if (!d.authenticated) { showLogin(); return; }
+      state.session = d;
+      enterApp();
+    } catch { showLogin(); }
+  }
+  function showLogin() { loginEl.classList.remove('hidden'); appEl.style.display = 'none'; }
+  async function enterApp() {
+    loginEl.classList.add('hidden'); appEl.style.display = 'flex';
+    $('authPill').textContent = 'user: ' + (state.session.user_id || 'scott');
+    await refreshStatus();
+    pollEvents(); setInterval(pollEvents, 3000);
+    addMessage('assistant', "Welcome to Sophia. I'm connected to the AssistX auto-router. Ask me anything — if you request a task, I'll extract it and route it to AssistX automatically.");
+  }
+
+  async function refreshStatus() {
+    try {
+      const s = await (await api('/status')).json();
+      const llm = s.llm || {};
+      const p = $('modelPill');
+      if (llm.assistant_configured) { p.className = 'pill ok'; p.textContent = 'model: ' + (llm.assistant_model || 'auto-router'); }
+      else { p.className = 'pill warn'; p.textContent = 'model: mock (no LLM configured)'; }
+    } catch {}
+    try {
+      const g = await (await api('/memory-graph/status')).json();
+      const p = $('graphPill');
+      if (g.password_configured) { p.className = 'pill ok'; p.textContent = 'graph: ready'; }
+      else { p.className = 'pill warn'; p.textContent = 'graph: not configured'; }
+    } catch {}
+    try {
+      const d = await (await api('/dispatch/status')).json();
+      const p = $('assistxPill');
+      if (d.assistx_reachable) { p.className = 'pill ok'; p.textContent = 'assistx: connected'; }
+      else { p.className = 'pill bad'; p.textContent = 'assistx: unreachable'; }
+    } catch {}
+  }
+
+  // ---------- login ----------
+  const loginMic = $('loginMic');
+  loginMic.addEventListener('mousedown', startLoginVoice);
+  loginMic.addEventListener('mouseup', stopLoginVoice);
+  loginMic.addEventListener('mouseleave', stopLoginVoice);
+  loginMic.addEventListener('touchstart', (e) => { e.preventDefault(); startLoginVoice(); });
+  loginMic.addEventListener('touchend', (e) => { e.preventDefault(); stopLoginVoice(); });
+
+  async function startLoginVoice() {
+    if (!navigator.mediaDevices || !window.MediaRecorder) { toast('Voice unlock needs a secure context + mic.'); return; }
+    try {
+      state.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      state.recorder = new MediaRecorder(state.micStream);
+      state.micChunks = [];
+      state.recorder.ondataavailable = (ev) => { if (ev.data.size) state.micChunks.push(ev.data); };
+      state.recorder.start();
+      loginMic.classList.add('rec'); loginMic.textContent = '●';
+      $('voiceLoginStatus').style.color = 'var(--muted)';
+      $('voiceLoginStatus').textContent = 'Recording… release to finish.';
+    } catch { toast('Microphone blocked.'); }
+  }
+  async function stopLoginVoice() {
+    if (!state.recorder || state.recorder.state === 'inactive') return;
+    loginMic.classList.remove('rec'); loginMic.textContent = '🎙';
+    const stopped = new Promise((res) => state.recorder.onstop = res);
+    state.recorder.stop(); await stopped;
+    if (state.micStream) state.micStream.getTracks().forEach(t => t.stop());
+    const blob = new Blob(state.micChunks, { type: state.recorder.mimeType || 'audio/webm' });
+    state.lastVoiceBlob = blob;
+    if (!blob.size) return;
+    $('voiceLoginStatus').style.color = 'var(--muted)';
+    $('voiceLoginStatus').textContent = 'Clip ready — tap “Unlock with voice”.';
+  }
+  $('voiceLoginBtn').addEventListener('click', async () => {
+    if (!state.lastVoiceBlob || !state.lastVoiceBlob.size) {
+      $('voiceLoginStatus').style.color = 'var(--red)';
+      $('voiceLoginStatus').textContent = 'Record a voice clip first (hold 🎙).'; return;
+    }
+    $('voiceLoginBtn').disabled = true;
+    $('voiceLoginStatus').style.color = 'var(--muted)';
+    $('voiceLoginStatus').textContent = 'Verifying voice identity…';
+    const form = new FormData();
+    form.append('audio', state.lastVoiceBlob, 'voice-login.webm');
+    form.append('user_id', 'scott'); form.append('session_id', 'console');
+    try {
+      const r = await api('/auth/voice-login', { method: 'POST', body: form });
+      const d = await r.json();
+      if (r.ok && d.authenticated) { location.reload(); return; }
+      const pct = ((d.score || 0) * 100).toFixed(0);
+      $('voiceLoginStatus').style.color = 'var(--red)';
+      $('voiceLoginStatus').textContent = 'Voice rejected ' + pct + '% — try again or use your passphrase.';
+    } catch {
+      $('voiceLoginStatus').style.color = 'var(--red)';
+      $('voiceLoginStatus').textContent = 'Voice unlock failed.';
+    } finally { $('voiceLoginBtn').disabled = false; }
+  });
+  $('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('loginBtn'); btn.disabled = true; $('loginError').textContent = '';
+    try {
+      const r = await api('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passphrase: $('pass').value }) });
+      if (r.ok) location.reload();
+      else $('loginError').textContent = 'Invalid passphrase.';
+    } catch { $('loginError').textContent = 'Login request failed.'; }
+    finally { btn.disabled = false; }
+  });
+  $('logoutBtn').addEventListener('click', async () => { await api('/auth/logout', { method: 'POST' }); location.reload(); });
+
+  // ---------- chat ----------
+  const messages = $('messages');
+  function addMessage(role, text, withCaret = false) {
+    const m = document.createElement('div');
+    m.className = 'msg ' + role;
+    m.innerHTML = escapeHtml(text) + (withCaret ? '<span class="caret"></span>' : '');
+    messages.appendChild(m); messages.scrollTop = messages.scrollHeight;
+    return m;
+  }
+  function pushHistory(role, content) { state.history.push({ role, content }); if (state.history.length > 24) state.history.shift(); }
+
+  async function currentContext() {
+    let devId = 'web';
+    try { devId = localStorage.getItem('sophia_device_id') || 'web'; } catch {}
+    const ctx = { platform: 'web', device_id: devId, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '' };
+    if (navigator.geolocation) {
+      try {
+        const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: false, timeout: 3000, maximumAge: 600000 }));
+        ctx.location = { lat: +pos.coords.latitude.toFixed(5), lng: +pos.coords.longitude.toFixed(5), accuracy_m: Math.round(pos.coords.accuracy || 0) };
+      } catch {}
+    }
+    return ctx;
+  }
+
+  async function sendRaw(text) {
+    if (state.streaming) return;
+    addMessage('user', text); pushHistory('user', text);
+    const assistantEl = addMessage('assistant', '', true);
+    let full = '';
+    state.streaming = true; $('sendBtn').disabled = true;
+    const payload = {
+      messages: [
+        { role: 'system', content: 'You are Sophia, a concise and proactive personal assistant connected to the AssistX auto-router. When the user asks for something to be done, make the request explicit so it can become a task.' },
+        ...state.history.slice(0, -1),
+        { role: 'user', content: text },
+      ],
+      session_id: 'console',
+      context: await currentContext(),
+    };
+    try {
+      const res = await api('/api/chat/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (res.status === 401) { toast('Session expired — please log in again.'); showLogin(); return; }
+      if (!res.ok || !res.body) throw new Error('stream failed');
+      const reader = res.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buffer.indexOf('\n\n')) >= 0) {
+          const chunk = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
+          if (!chunk.startsWith('data:')) continue;
+          const json = chunk.slice(5).trim(); if (!json) continue;
+          let evt; try { evt = JSON.parse(json); } catch { continue; }
+          handleEvent(evt, assistantEl);
+        }
+      }
+      if (buffer.startsWith('data:')) { try { handleEvent(JSON.parse(buffer.slice(5).trim()), assistantEl); } catch {} }
+    } catch (err) {
+      assistantEl.querySelector('.caret')?.remove();
+      if (isOffline) {
+        assistantEl.innerHTML = escapeHtml('⚠ Offline — message queued, will send when connection returns.');
+        enqueueOffline(() => { assistantEl.remove(); sendRaw(text); });
+      } else {
+        assistantEl.innerHTML = escapeHtml('⚠ Could not reach the assistant: ' + err.message);
+        const mp = $('modelPill'); mp.className = 'pill bad'; mp.textContent = 'model: error';
+      }
+    } finally {
+      state.streaming = false; $('sendBtn').disabled = false;
+      if (!full) full = assistantEl.textContent || '';
+      pushHistory('assistant', full);
+    }
+  }
+  function handleEvent(evt, assistantEl) {
+    if (evt.type === 'token') {
+      assistantEl.querySelector('.caret')?.remove();
+      assistantEl.innerHTML = escapeHtml(assistantEl.textContent + evt.text) + '<span class="caret"></span>';
+      messages.scrollTop = messages.scrollHeight;
+    } else if (evt.type === 'tasks') {
+      assistantEl.querySelector('.caret')?.remove();
+      if (evt.tasks && evt.tasks.length) toast(evt.tasks.length + ' task(s) extracted — routing to AssistX…');
+    } else if (evt.type === 'ingested') {
+      (evt.results || []).forEach(addTaskCard); refreshTaskCount();
+      (evt.results || []).forEach(r => { if (r.correlation_id) pollTrace(r.correlation_id, r.task); });
+    } else if (evt.type === 'meta') {
+      $('chatMeta').textContent = 'answered by ' + evt.endpoint;
+    } else if (evt.type === 'error') {
+      assistantEl.querySelector('.caret')?.remove();
+      assistantEl.innerHTML = escapeHtml('⚠ ' + (evt.error || 'error'));
+      const mp = $('modelPill'); mp.className = 'pill bad'; mp.textContent = 'model: error';
+    } else if (evt.type === 'done') {
+      assistantEl.querySelector('.caret')?.remove();
+    }
+  }
+  function refreshTaskCount() { $('taskCount').textContent = String($('taskList').querySelectorAll('.task').length); }
+  function addTaskCard(result) {
+    const task = result.task || {}; const dispatch = result.dispatch || {};
+    const card = document.createElement('div'); card.className = 'task'; card.dataset.cid = result.correlation_id || '';
+    const prio = (task.priority || 'medium').toLowerCase();
+    const statusBadge = dispatch.sent ? '<span class="badge ingested">ingested ✓</span>' : '<span class="badge failed">failed</span>';
+    const meta = dispatch.task_id ? '<span class="t-meta">assistx task_id: ' + escapeHtml(String(dispatch.task_id)) + '</span>'
+      : (dispatch.error ? '<span class="t-meta" style="color:#fda4af;">' + escapeHtml(dispatch.error) + '</span>' : '');
+    card.innerHTML =
+      '<div class="t-head"><span class="prio ' + prio + '">' + prio + '</span><span class="t-title">' + escapeHtml(task.title || 'Untitled task') + '</span></div>' +
+      (task.description ? '<div class="t-desc">' + escapeHtml(task.description) + '</div>' : '') +
+      '<div class="t-status"><span class="badge extracted">extracted</span>' + statusBadge + meta + '</div>';
+    const empty = $('taskList').querySelector('div');
+    if (empty && $('taskList').children.length === 1 && empty.style.color) empty.remove();
+    $('taskList').prepend(card); card._status = card.querySelector('.t-status');
+  }
+  async function pollTrace(correlationId) {
+    if (!correlationId) return;
+    const card = $('taskList').querySelector('.task[data-cid="' + cssEscape(correlationId) + '"]');
+    for (let i = 0; i < 5; i++) {
+      await new Promise(r => setTimeout(r, 1500));
+      try {
+        const d = await (await api('/dispatch/trace/' + encodeURIComponent(correlationId))).json();
+        if (d.error) return;
+        const st = d.current_state || 'unknown';
+        const last = (d.events && d.events.length) ? d.events[d.events.length - 1].event_type : '';
+        if (card && card._status) {
+          const assigned = (d.events || []).find(e => /assign|route|worker|claim/.test(e.event_type || ''));
+          const ab = assigned ? '<span class="badge assigned">assigned: ' + escapeHtml(assigned.event_type) + '</span>' : '';
+          card._status.innerHTML = '<span class="badge extracted">extracted</span><span class="badge ingested">ingested ✓</span>' + ab + '<span class="t-meta">state: ' + escapeHtml(st) + (last ? ' · ' + escapeHtml(last) : '') + '</span>';
+        }
+        if (st === 'completed' || st === 'done' || assigned) return;
+      } catch {}
+    }
+  }
+  function cssEscape(s) { return String(s).replace(/[^a-zA-Z0-9_-]/g, c => '\\' + c); }
+
+  let lastEventId = 0;
+  async function pollEvents() {
+    try {
+      const d = await (await api('/events?after_id=' + lastEventId + '&session_id=console')).json();
+      for (const ev of (d.events || [])) {
+        lastEventId = Math.max(lastEventId, ev.id || 0);
+        if (ev.type === 'tasks_ingested') {
+          (ev.payload.results || []).forEach(r => { addTaskCard(r); if (r.correlation_id) pollTrace(r.correlation_id); });
+          refreshTaskCount();
+        } else if (ev.type === 'tasks_extracted') {
+          const n = (ev.payload.tasks || []).length; if (n) toast(n + ' task(s) extracted — routing to AssistX…');
+        }
+      }
+    } catch {}
+  }
+  function sendMessage() {
+    const text = $('composer').value.trim(); if (!text) return;
+    $('composer').value = ''; $('composer').style.height = 'auto'; sendRaw(text);
+  }
+  $('sendBtn').addEventListener('click', sendMessage);
+  $('composer').addEventListener('input', () => { $('composer').style.height = 'auto'; $('composer').style.height = Math.min(140, $('composer').scrollHeight) + 'px'; });
+  $('composer').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+
+  // ---------- voice ----------
+  const micBtn = $('micBtn');
+  try { const k = localStorage.getItem('sophia_admin_key'); if (k) $('adminKey').value = k; } catch {}
+  $('adminKey').addEventListener('input', () => { try { localStorage.setItem('sophia_admin_key', $('adminKey').value); } catch {} });
+  micBtn.addEventListener('mousedown', startVoiceCheck);
+  micBtn.addEventListener('mouseup', stopVoiceCheck);
+  micBtn.addEventListener('mouseleave', stopVoiceCheck);
+  micBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startVoiceCheck(); });
+  micBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopVoiceCheck(); });
+  $('verifyBtn').addEventListener('click', () => verifyVoiceCheck(false));
+  $('overrideBtn').addEventListener('click', overrideAndTrain);
+  $('backfillBtn').addEventListener('click', backfillGlobalSpeakers);
+
+  async function startVoiceCheck() {
+    if (!navigator.mediaDevices || !window.MediaRecorder) { toast('Voice check needs a secure context + mic.'); return; }
+    try {
+      state.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      state.recorder = new MediaRecorder(state.micStream);
+      state.micChunks = [];
+      state.recorder.ondataavailable = (ev) => { if (ev.data.size) state.micChunks.push(ev.data); };
+      state.recorder.start();
+      micBtn.classList.add('rec'); micBtn.textContent = '●';
+      $('voiceStatus').className = 'voice-status'; $('voiceStatus').textContent = 'Recording… release to verify.';
+    } catch { toast('Microphone blocked.'); }
+  }
+  async function stopVoiceCheck() {
+    if (!state.recorder || state.recorder.state === 'inactive') return;
+    micBtn.classList.remove('rec'); micBtn.textContent = '🎙';
+    const stopped = new Promise((res) => state.recorder.onstop = res);
+    state.recorder.stop(); await stopped;
+    if (state.micStream) state.micStream.getTracks().forEach(t => t.stop());
+    const blob = new Blob(state.micChunks, { type: state.recorder.mimeType || 'audio/webm' });
+    state.lastVoiceBlob = blob;
+    if (!blob.size) return;
+    await verifyVoiceCheck(false);
+  }
+  async function verifyVoiceCheck(showToast) {
+    if (!state.lastVoiceBlob || !state.lastVoiceBlob.size) { setVoice('bad', 'Record a voice clip first (hold 🎙).'); return; }
+    const form = new FormData();
+    form.append('audio', state.lastVoiceBlob, 'voice-check.webm');
+    form.append('user_id', state.session.user_id || 'scott'); form.append('session_id', 'console');
+    setVoice('', 'Verifying voice identity…');
+    try {
+      const r = await api('/auth/verify', { method: 'POST', body: form });
+      const d = await r.json();
+      const pct = ((d.score || 0) * 100).toFixed(0);
+      if (d.accepted) setVoice('ok', 'Voice accepted ' + pct + '%' + (d.match_source === 'historical_fallback' ? ' (fallback)' : ''));
+      else setVoice('bad', 'Voice rejected ' + pct + '% — use “Override & retrain” to add this clip and improve the model.');
+      if (showToast) toast((d.accepted ? 'Voice accepted ' : 'Voice rejected ') + pct + '%', 3200);
+      refreshVoiceHealth();
+    } catch (err) {
+      if (isOffline) { setVoice('', 'Offline — voice check queued, will retry later.'); enqueueOffline(() => verifyVoiceCheck(false)); }
+      else setVoice('bad', 'Voice check failed.');
+    }
+  }
+  function setVoice(kind, text) { $('voiceStatus').className = 'voice-status' + (kind ? ' ' + kind : ''); $('voiceStatus').textContent = text; }
+
+  $('enrollBtn').addEventListener('click', async () => {
+    const name = ($('enrollName').value || '').trim();
+    if (!name) { setEnroll('bad', 'Enter a speaker name (user id).'); return; }
+    if (!state.lastVoiceBlob || !state.lastVoiceBlob.size) { setEnroll('bad', 'Record a voice clip first (hold 🎙).'); return; }
+    const form = new FormData();
+    form.append('audio', state.lastVoiceBlob, 'enroll.webm'); form.append('user_id', name); form.append('force', 'false');
+    setEnroll('', 'Enrolling "' + name + '"…');
+    try {
+      const r = await api('/voiceprints/enroll', { method: 'POST', body: form });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'enroll failed');
+      setEnroll('link', 'Enrolled "' + name + '" (' + (d.sample_count || '?') + ' samples).');
+      refreshVoiceHealth();
+    } catch (err) { setEnroll('bad', 'Enroll failed: ' + (err.message || err)); }
+  });
+  function setEnroll(kind, text) { $('enrollStatus').className = 'voice-status' + (kind ? ' ' + kind : ''); $('enrollStatus').textContent = text; }
+
+  async function backfillGlobalSpeakers() {
+    const key = $('adminKey').value || '';
+    if (!key.trim()) { setBackfill('bad', 'Owner override key required to backfill.'); return; }
+    $('backfillBtn').disabled = true; setBackfill('', 'Backfilling global speakers…');
+    const form = new FormData(); form.append('admin_key', key);
+    try {
+      const r = await api('/voiceprints/backfill-global-speakers', { method: 'POST', body: form });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'backfill failed');
+      setBackfill('link', 'Backfill done: linked ' + (d.linked || 0) + ', skipped ' + (d.skipped || 0) + ', errors ' + (d.errors || 0) + '.');
+      refreshVoiceHealth();
+    } catch (err) { setBackfill('bad', 'Backfill failed: ' + (err.message || err)); }
+    finally { $('backfillBtn').disabled = false; }
+  }
+  function setBackfill(kind, text) { $('backfillStatus').className = 'voice-status' + (kind ? ' ' + kind : ''); $('backfillStatus').textContent = text; }
+
+  async function overrideAndTrain() {
+    if (!state.lastVoiceBlob || !state.lastVoiceBlob.size) { setVoice('bad', 'Record a voice clip first (hold 🎙).'); return; }
+    const key = $('adminKey').value || '';
+    if (!key.trim()) { setVoice('bad', 'Owner override key required to retrain.'); return; }
+    const form = new FormData();
+    form.append('audio', state.lastVoiceBlob, 'owner-override.webm');
+    form.append('user_id', state.session.user_id || 'scott'); form.append('session_id', 'console'); form.append('admin_key', key);
+    setVoice('', 'Override: adding clip + retraining speaker embedding…');
+    try {
+      const r = await api('/voiceprints/owner-override-enroll', { method: 'POST', body: form });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'override failed');
+      const link = d.speaker_linkage || {};
+      let lt = '';
+      if (link.linked) lt = ' · linked to global speaker "' + (link.matched_speaker_user_id || 'owner') + '" (' + (link.method || 'linked') + ')';
+      else if (link.error) lt = ' · speaker link: ' + link.error;
+      setVoice('link', 'Voiceprint strengthened (' + (d.sample_count || '?') + ' samples)' + lt + '. Re-verifying…');
+      await verifyVoiceCheck(false); refreshVoiceHealth();
+    } catch (err) { setVoice('bad', 'Override failed: ' + (err.message || err)); }
+  }
+
+  async function refreshVoiceHealth() {
+    const box = $('voiceHealth'); if (!box) return;
+    try {
+      const [status, link] = await Promise.all([(await api('/voiceprints/status')).json(), (await api('/voiceprints/linkage')).json()]);
+      let html = '<div class="health-card"><div class="hc-title">Voiceprint Health</div>';
+      const users = status.users || [];
+      if (!users.length) html += '<div class="hc-row">No enrolled speakers yet.</div>';
+      users.forEach(u => {
+        html += '<div class="hc-row"><b>' + escapeHtml(u.user_id) + '</b> — ' + (u.sample_count || 0) + ' samples · base threshold ' + (u.threshold ?? '?');
+        if (u.devices && u.devices.length) html += ' · devices: ' + escapeHtml(u.devices.join(', '));
+        html += '</div>';
+        const calib = u.device_calibration || {};
+        Object.keys(calib).forEach(dev => {
+          const c = calib[dev];
+          const adaptive = (c.accepted_mean != null) ? (c.accepted_mean - (u.adaptive_threshold_margin ?? 0.05)).toFixed(2) : '-';
+          html += '<div class="link-item">device <b>' + escapeHtml(dev) + '</b> — adaptive threshold ' + adaptive + ' (accepted mean ' + (c.accepted_mean != null ? c.accepted_mean.toFixed(2) : '-') + ', n=' + ((c.n_accepted || 0) + (c.n_rejected || 0)) + ')</div>';
+        });
+      });
+      html += '</div>';
+      const linked = (link.linked_speakers || []);
+      html += '<div class="health-card"><div class="hc-title">Global Speaker Linkage</div>';
+      html += '<div class="hc-row">enabled: ' + (link.link_enabled ? 'yes' : 'no') + ' · threshold ' + (link.link_threshold ?? '?') + ' · embedding dim ' + (link.embedding_dim || 0) + '</div>';
+      if (!linked.length) html += '<div class="hc-row">Not yet linked to a global speaker.</div>';
+      linked.forEach(s => { html += '<div class="link-item">' + escapeHtml(s.speaker_user_id || '?') + (s.is_owner ? ' (owner)' : '') + ' <span class="li-score">score ' + (s.score != null ? (s.score * 100).toFixed(0) + '%' : '?') + ' · ' + escapeHtml(s.method || '') + '</span></div>'; });
+      html += '</div>';
+      box.innerHTML = html;
+    } catch { box.innerHTML = '<div class="health-card"><div class="hc-row">Could not load voice health.</div></div>'; }
+  }
+
+  // ---------- capture ----------
+  const capRecordBtn = $('capRecordBtn'), capRecDot = $('capRecDot'), capRecState = $('capRecState'), capMeter = $('capMeter');
+  let capRecording = false, capAudioCtx = null, capAnalyser = null, capRaf = 0, capBlob = null, capFileBlob = null;
+  try { const n = parseInt(localStorage.getItem('sophia_capture_count') || '0'); if (n > 0) $('capSavedCount').textContent = n + ' saved'; } catch {}
+
+  capRecordBtn.addEventListener('click', () => { capRecording ? stopCapRecord() : startCapRecord(); });
+  $('capFile').addEventListener('change', () => {
+    const f = $('capFile').files && $('capFile').files[0];
+    capFileBlob = f || null; capBlob = null;
+    capRecState.textContent = f ? 'file: ' + f.name : 'idle';
+    $('capSaveBtn').disabled = false;
+  });
+  $('capSaveBtn').addEventListener('click', saveCapture);
+  $('capClearBtn').addEventListener('click', () => {
+    $('capTranscript').value = ''; capBlob = null; capFileBlob = null; $('capFile').value = '';
+    $('capResult').style.display = 'none'; capRecState.textContent = 'idle'; $('capSaveBtn').disabled = true;
+  });
+
+  async function startCapRecord() {
+    if (!navigator.mediaDevices || !window.MediaRecorder) { toast('Recording needs a secure context + mic.'); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      capAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = capAudioCtx.createMediaStreamSource(stream);
+      capAnalyser = capAudioCtx.createAnalyser(); capAnalyser.fftSize = 256; src.connect(capAnalyser);
+      const data = new Uint8Array(capAnalyser.frequencyBinCount);
+      const tick = () => { capAnalyser.getByteFrequencyData(data); const avg = data.reduce((a, b) => a + b, 0) / data.length; capMeter.style.width = Math.min(100, avg * 1.6) + '%'; capRaf = requestAnimationFrame(tick); };
+      tick();
+      const rec = new MediaRecorder(stream); state._capStream = stream; state._capRec = rec; state._capChunks = [];
+      rec.ondataavailable = (ev) => { if (ev.data.size) state._capChunks.push(ev.data); };
+      rec.start();
+      capRecording = true; capRecordBtn.textContent = '■ Stop'; capRecDot.classList.add('live'); capRecState.textContent = 'recording…';
+    } catch { toast('Microphone blocked.'); }
+  }
+  function stopCapRecord() {
+    const rec = state._capRec; if (!rec || rec.state === 'inactive') return;
+    const stopped = new Promise((res) => rec.onstop = res); rec.stop();
+    stopped.then(() => {
+      if (state._capStream) state._capStream.getTracks().forEach(t => t.stop());
+      if (capAudioCtx) { cancelAnimationFrame(capRaf); capAudioCtx.close(); }
+      capBlob = new Blob(state._capChunks, { type: rec.mimeType || 'audio/webm' });
+      capFileBlob = null; $('capFile').value = '';
+      capRecording = false; capRecordBtn.textContent = '● Record'; capRecDot.classList.remove('live'); capMeter.style.width = '0%';
+      capRecState.textContent = 'recorded — transcribing…';
+      transcribeAndShow();
+    });
+  }
+  async function transcribeAndShow() {
+    const blob = capBlob || capFileBlob;
+    if (!blob) return;
+    const form = new FormData();
+    form.append('audio', blob, 'capture.webm');
+    form.append('transcript', '');
+    form.append('user_id', state.session.user_id || 'scott');
+    form.append('session_id', 'console');
+    form.append('activity_context', $('capContext').value || '');
+    try {
+      const r = await api('/capture', { method: 'POST', body: form });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'capture failed');
+      $('capTranscript').value = d.transcript || '';
+      showCapResult(d);
+    } catch (err) {
+      capRecState.textContent = 'transcribe failed: ' + (err.message || err);
+      $('capSaveBtn').disabled = false;
+    }
+  }
+  function showCapResult(d) {
+    const box = $('capResult'); box.style.display = '';
+    if (d.graph_saved) { box.className = 'result-line ok'; box.textContent = 'Saved to memory graph (capture ' + (d.capture_id || '').slice(0, 8) + ').'; }
+    else if (d.graph_error) { box.className = 'result-line bad'; box.textContent = 'Saved locally; graph error: ' + d.graph_error; }
+    else { box.className = 'result-line ok'; box.textContent = 'Captured (transcript ready).'; }
+    if (d.transcribed_via) capRecState.textContent = 'transcribed via ' + d.transcribed_via;
+    else capRecState.textContent = 'ready';
+    $('capSaveBtn').disabled = true; // already saved on first capture
+    const n = parseInt(localStorage.getItem('sophia_capture_count') || '0') + 1;
+    localStorage.setItem('sophia_capture_count', String(n));
+    $('capSavedCount').textContent = n + ' saved';
+  }
+  async function saveCapture() {
+    const blob = capBlob || capFileBlob;
+    if (!blob && !$('capTranscript').value.trim()) { toast('Record or type something first.'); return; }
+    const form = new FormData();
+    if (blob) form.append('audio', blob, 'capture.webm');
+    form.append('transcript', $('capTranscript').value || '');
+    form.append('user_id', state.session.user_id || 'scott');
+    form.append('session_id', 'console');
+    form.append('activity_context', $('capContext').value || '');
+    $('capSaveBtn').disabled = true;
+    try {
+      const r = await api('/capture', { method: 'POST', body: form });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'capture failed');
+      showCapResult(d);
+    } catch (err) {
+      const box = $('capResult'); box.style.display = ''; box.className = 'result-line bad';
+      box.textContent = 'Save failed: ' + (err.message || err);
+      $('capSaveBtn').disabled = false;
+    }
+  }
+
+  // ---------- meetings ----------
+  const meetingFile = $('meetingFile');
+  meetingFile.addEventListener('change', () => {
+    const f = meetingFile.files && meetingFile.files[0];
+    $('processMeetingBtn').disabled = !f;
+    $('meetingStatus').textContent = f ? 'Ready: ' + f.name : 'Upload an audio file to process.';
+    $('meetingResults').style.display = 'none';
+  });
+  $('processMeetingBtn').addEventListener('click', processMeeting);
+  async function processMeeting() {
+    const file = meetingFile.files && meetingFile.files[0]; if (!file) return;
+    $('processMeetingBtn').disabled = true; $('meetingProgress').style.width = '5%';
+    $('meetingStatus').textContent = 'Uploading…'; $('meetingResults').style.display = 'none';
+    const form = new FormData();
+    form.append('audio', file, file.name || 'meeting.webm'); form.append('summarize', 'true');
+    const maxSpk = $('meetingMaxSpeakers').value; if (maxSpk) form.append('max_speakers', maxSpk);
+    try {
+      const res = await api('/meeting/process', { method: 'POST', body: form });
+      const init = await res.json();
+      if (!res.ok) throw new Error(init.detail || 'Upload failed');
+      const taskId = init.task_id; let done = false;
+      while (!done) {
+        await new Promise(r => setTimeout(r, 1500));
+        const t = await (await api('/meeting/status/' + taskId)).json();
+        if (!t || t.status === 'error') throw new Error((t && t.error) || 'Processing failed');
+        $('meetingProgress').style.width = Math.max(5, t.progress_pct || 0) + '%';
+        $('meetingStatus').textContent = t.step || 'Processing…';
+        if (t.status === 'completed' && t.result) {
+          done = true; state.lastMeetingResult = t.result;
+          $('meetingProgress').style.width = '100%';
+          $('meetingStatus').textContent = 'Done. ' + (t.result.segments || []).length + ' segments, ' + (t.result.num_speakers || 0) + ' speaker(s).';
+          renderMeeting(t.result);
+          $('meetingResults').style.display = '';
+          $('dispatchMeetingBtn').disabled = !t.result.transcript;
+        }
+      }
+    } catch (err) { $('meetingStatus').textContent = 'Error: ' + err.message; $('meetingProgress').style.width = '0%'; }
+    finally { $('processMeetingBtn').disabled = false; }
+  }
+  function renderMeeting(data) {
+    const segs = data.segments || [];
+    $('meetingTranscript').innerHTML = segs.map(s => '<div class="seg"><span class="spk">' + escapeHtml(s.name || ('Speaker ' + ((s.speaker || 0) + 1))) + '</span> ' + escapeHtml(s.transcript || '(no speech)') + '</div>').join('');
+    if (data.summary) { $('meetingSummary').style.display = ''; $('summaryText').textContent = data.summary; }
+    else $('meetingSummary').style.display = 'none';
+  }
+  $('dispatchMeetingBtn').addEventListener('click', async () => {
+    if (!state.lastMeetingResult) return;
+    $('dispatchMeetingBtn').disabled = true;
+    try {
+      const r = await api('/dispatch/to-assistx', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event_type: 'meeting_transcript', text: (state.lastMeetingResult.transcript || '').slice(0, 500), metadata: { meeting_id: state.lastMeetingResult.meeting_id, num_speakers: state.lastMeetingResult.num_speakers }, auto_dispatch: true, target_url: dispatchCfg().url, target_token: dispatchCfg().token }) });
+      const d = await r.json();
+      toast(d.sent ? 'Meeting dispatched to AssistX ✓' : 'Dispatch failed: ' + (d.error || ''));
+      if (d.sent) appendDispatchLog('meeting_transcript', true, d);
+    } catch (e) { toast('Dispatch error: ' + e.message); }
+    finally { $('dispatchMeetingBtn').disabled = false; }
+  });
+  async function loadMeetingHistory() {
+    const box = $('meetingHistory'); box.innerHTML = '<div class="hc-row">Loading…</div>';
+    try {
+      const d = await (await api('/meeting/history?limit=20')).json();
+      if (d.error) { box.innerHTML = '<div class="hc-row">' + escapeHtml(d.error) + '</div>'; return; }
+      const ms = d.meetings || [];
+      if (!ms.length) { box.innerHTML = '<div class="hc-row">No meetings yet.</div>'; return; }
+      box.innerHTML = ms.map(m => {
+        const date = m.created_at ? new Date(m.created_at).toLocaleDateString() : '?';
+        return '<div class="meeting-item" data-id="' + escapeHtml(String(m.id || '')) + '"><span>[' + date + '] ' + m.duration_s + 's · ' + m.num_speakers + ' spk · ' + m.segment_count + ' segs' + (m.has_summary ? ' 📝' : '') + '</span><span class="del" data-id="' + escapeHtml(String(m.id || '')) + ' title="Delete">×</span></div>';
+      }).join('');
+      box.querySelectorAll('.meeting-item').forEach(it => it.addEventListener('click', (e) => {
+        if (e.target.classList.contains('del')) return;
+        loadMeetingDetail(it.dataset.id);
+      }));
+      box.querySelectorAll('.del').forEach(del => del.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm('Delete this meeting from Neo4j?')) return;
+        const r = await api('/meeting/history/' + encodeURIComponent(del.dataset.id), { method: 'DELETE' });
+        if (r.ok) loadMeetingHistory();
+      }));
+    } catch { box.innerHTML = '<div class="hc-row">Could not load history.</div>'; }
+  }
+  async function loadMeetingDetail(id) {
+    try {
+      const d = await (await api('/meeting/history/' + encodeURIComponent(id))).json();
+      if (d.error) { toast(d.error); return; }
+      state.lastMeetingResult = d;
+      renderMeeting(d);
+      $('meetingResults').style.display = '';
+      $('dispatchMeetingBtn').disabled = !d.transcript;
+      $('meetingStatus').textContent = 'Loaded meeting from history.';
+      goTab('meetings');
+    } catch (e) { toast('Load failed: ' + e.message); }
+  }
+
+  // ---------- dispatch ----------
+  function dispatchCfg() {
+    let url = 'http://host.docker.internal:8000', token = '', auto = false;
+    try { const s = JSON.parse(localStorage.getItem('sophia_dispatch_config') || '{}'); url = s.url || url; token = s.token || ''; auto = s.auto_dispatch === true; } catch {}
+    return { url, token, auto };
+  }
+  $('dispatchUrl').value = dispatchCfg().url; $('dispatchToken').value = dispatchCfg().token; $('autoDispatchToggle').checked = dispatchCfg().auto;
+  $('saveDispatchConfigBtn').addEventListener('click', () => {
+    const cfg = { url: $('dispatchUrl').value, token: $('dispatchToken').value, auto_dispatch: $('autoDispatchToggle').checked };
+    try { localStorage.setItem('sophia_dispatch_config', JSON.stringify(cfg)); } catch {}
+    $('saveDispatchConfigBtn').textContent = 'Saved!'; setTimeout(() => $('saveDispatchConfigBtn').textContent = 'Save Config', 1500);
+  });
+  async function refreshDispatchStatus() {
+    try {
+      const d = await (await api('/dispatch/status')).json();
+      const p = $('assistxPill');
+      if (d.assistx_reachable) { p.className = 'pill ok'; p.textContent = 'assistx: connected' + (d.assistx_webhook_status != null ? ' (' + d.assistx_webhook_status + ')' : ''); }
+      else { p.className = 'pill bad'; p.textContent = 'assistx: unreachable'; }
+      renderExecutionTrace(d.last_dispatch || null);
+    } catch { const p = $('assistxPill'); p.className = 'pill warn'; p.textContent = 'assistx: unknown'; }
+  }
+  $('dispatchSendBtn').addEventListener('click', async () => {
+    const cfg = dispatchCfg();
+    const payload = {
+      event_type: $('dispatchEventType').value, text: $('dispatchText').value,
+      metadata: {}, auto_dispatch: $('dispatchAuto').value === 'true',
+      target_url: cfg.url, target_token: cfg.token,
+    };
+    $('dispatchSendBtn').disabled = true;
+    try {
+      const r = await api('/dispatch/to-assistx', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const d = await r.json();
+      appendDispatchLog(payload.event_type, d.sent, d);
+      refreshDispatchStatus(); renderExecutionTrace(d);
+    } catch (err) {
+      appendDispatchLog(payload.event_type, false, { error: err.message });
+    } finally { $('dispatchSendBtn').disabled = false; }
+  });
+  function appendDispatchLog(type, sent, d) {
+    const entry = document.createElement('div');
+    entry.className = 'dl-item' + (sent ? '' : ' failed');
+    const time = new Date().toLocaleTimeString();
+    entry.innerHTML = '<div><b>' + escapeHtml(type) + '</b> <span style="color:var(--muted-2);">' + time + '</span></div><div>' + (sent ? '✓ Sent' : '✗ ' + escapeHtml(d.error || 'Failed')) + '</div>';
+    $('dispatchLog').prepend(entry);
+    while ($('dispatchLog').children.length > 50) $('dispatchLog').removeChild($('dispatchLog').lastChild);
+  }
+  async function renderExecutionTrace(ack) {
+    const box = $('executionTrace');
+    const lines = [];
+    if (ack) {
+      lines.push('AssistX: ' + (ack.sent ? 'accepted dispatch' : 'dispatch failed') + (ack.event_id ? ' event_id=' + ack.event_id : ''));
+      if (ack.correlation_id) lines.push('trace: /dispatch/trace/' + ack.correlation_id);
+    } else lines.push('No dispatch yet.');
+    box.textContent = lines.join('\n');
+    if (ack && ack.correlation_id && ack.sent) {
+      try {
+        const t = await (await api('/dispatch/trace/' + ack.correlation_id)).json();
+        if (t.events && t.events.length) {
+          lines.push('--- Trace (' + (t.current_state || 'unknown') + ') ---');
+          t.events.forEach(e => lines.push('• ' + e.event_type));
+          box.textContent = lines.join('\n');
+        }
+      } catch {}
+    }
+  }
+
+  // ---------- go ----------
+  boot();
+})();
+</script>
+</body>
+</html>

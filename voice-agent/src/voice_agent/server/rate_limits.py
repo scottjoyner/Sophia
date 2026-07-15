@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict, deque
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Callable, Deque, Iterable
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -47,7 +47,7 @@ class InMemoryRateLimiter:
     def __init__(self, rules: Iterable[RateLimitRule] = DEFAULT_RATE_LIMIT_RULES, *, max_keys: int = 4096) -> None:
         self.rules = tuple(rules)
         self.max_keys = max_keys
-        self._hits: dict[tuple[str, str], Deque[float]] = defaultdict(deque)
+        self._hits: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 
     def client_key(self, request: Request) -> str:
         forwarded = request.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip()

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -36,8 +35,8 @@ class OpenVoiceTTS:
         model_path = Path(self.model_path) if self.model_path else None
 
         try:
-            from openvoice.api import ToneColorConverter
             from openvoice import se_extractor
+            from openvoice.api import ToneColorConverter
         except ImportError:
             raise RuntimeError(
                 "openvoice package is required. Install with: pip install openvoice"
@@ -92,7 +91,6 @@ class OpenVoiceTTS:
         if not self._tts_model or not self._tone_converter:
             return np.zeros(int(self.sample_rate * 0.5), dtype=np.float32)
 
-        import torch
         import tempfile
 
         tmp_dir = Path(tempfile.mkdtemp(prefix="openvoice_"))
@@ -115,7 +113,6 @@ class OpenVoiceTTS:
             audio, sr = read_wav(out_path)
             if sr != self.sample_rate:
                 import scipy.signal
-                import numpy as np
                 ratio = self.sample_rate / sr
                 new_len = int(len(audio) * ratio)
                 audio = scipy.signal.resample(audio, new_len)

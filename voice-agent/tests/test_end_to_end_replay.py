@@ -8,14 +8,14 @@ import urllib.request
 from pathlib import Path
 
 import numpy as np
-import uvicorn
 import pytest
+import uvicorn
 
+from voice_agent import server as server_pkg
 from voice_agent.auth.enroll import enroll_from_files
 from voice_agent.bench.replay_client import replay_wav
 from voice_agent.config import AppConfig, AuthConfig, PathsConfig, ServerConfig
 from voice_agent.server.app import create_app
-from voice_agent import server as server_pkg
 
 
 def write_sample_wav(path: Path, seconds: float = 2.5, sample_rate: int = 16000) -> None:

@@ -4,7 +4,7 @@ import json
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 
 class CaptureIdempotencyStore:
@@ -55,7 +55,7 @@ class CaptureIdempotencyStore:
                 """
             )
 
-    def get(self, client_capture_id: str | None) -> Dict[str, Any] | None:
+    def get(self, client_capture_id: str | None) -> dict[str, Any] | None:
         key = self.normalize_key(client_capture_id)
         if not key:
             return None
@@ -79,7 +79,7 @@ class CaptureIdempotencyStore:
         payload["client_capture_id"] = key
         return payload
 
-    def put(self, client_capture_id: str | None, capture_id: str, response: Dict[str, Any]) -> None:
+    def put(self, client_capture_id: str | None, capture_id: str, response: dict[str, Any]) -> None:
         key = self.normalize_key(client_capture_id)
         if not key:
             return
@@ -103,7 +103,7 @@ class CaptureIdempotencyStore:
                 (key, capture_id, response_json, now, now, expires),
             )
 
-    def counts(self) -> Dict[str, int]:
+    def counts(self) -> dict[str, int]:
         now = self.now_ms()
         with self._connect() as conn:
             row = conn.execute("SELECT count(*) AS n FROM capture_idempotency").fetchone()
@@ -121,7 +121,7 @@ class CaptureIdempotencyStore:
             "expired": int(expired["n"] if expired else 0),
         }
 
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         counts = self.counts()
         return {
             "counts": counts,

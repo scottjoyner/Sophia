@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
 import numpy as np
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.preprocessing import normalize
 
 from .speaker_embedder import SpeakerEmbedder
-
 
 _SILERO_VAD = None
 
@@ -32,11 +29,11 @@ def diarize(
     audio: np.ndarray,
     sample_rate: int,
     window_s: float = 1.5,
-    max_speakers: Optional[int] = None,
+    max_speakers: int | None = None,
     min_speakers: int = 1,
     min_segment_s: float = 0.5,
     speech_pad_s: float = 0.3,
-) -> List[Dict]:
+) -> list[dict]:
     vad_segments = _vad_segments(audio, sample_rate, speech_pad_s, min_segment_s)
     if not vad_segments:
         return [{"start": 0.0, "end": len(audio) / sample_rate, "speaker": 0, "cluster_confidence": 1.0}]
@@ -93,7 +90,7 @@ def diarize(
 
 def _vad_segments(
     audio: np.ndarray, sr: int, pad_s: float, min_s: float
-) -> List[Dict]:
+) -> list[dict]:
     try:
         model, get_speech_timestamps = _get_vad()
         import torch
@@ -119,7 +116,7 @@ def _vad_segments(
         return _segment_audio_fallback(audio, sr)
 
 
-def _segment_audio_fallback(audio: np.ndarray, sr: int) -> List[Dict]:
+def _segment_audio_fallback(audio: np.ndarray, sr: int) -> list[dict]:
     n = len(audio)
     window_len = int(sr * 0.5)
     stride_len = int(sr * 0.25)
@@ -134,8 +131,8 @@ def _segment_audio_fallback(audio: np.ndarray, sr: int) -> List[Dict]:
 
 
 def _split_into_chunks(
-    audio: np.ndarray, sr: int, vad_segments: List[Dict], window_s: float
-) -> List[Dict]:
+    audio: np.ndarray, sr: int, vad_segments: list[dict], window_s: float
+) -> list[dict]:
     chunks = []
     for seg in vad_segments:
         seg_start = seg["start"]
@@ -154,7 +151,7 @@ def _split_into_chunks(
     return chunks
 
 
-def _pick_k(embeddings: np.ndarray, max_speakers: Optional[int], min_speakers: int, n: int) -> int:
+def _pick_k(embeddings: np.ndarray, max_speakers: int | None, min_speakers: int, n: int) -> int:
     if n <= 2:
         return 1
     hi = n
@@ -180,8 +177,8 @@ def _pick_k(embeddings: np.ndarray, max_speakers: Optional[int], min_speakers: i
 
 
 def _build_timeline(
-    chunks: List[Dict], labels: np.ndarray, confidences: np.ndarray, min_segment_s: float
-) -> List[Dict]:
+    chunks: list[dict], labels: np.ndarray, confidences: np.ndarray, min_segment_s: float
+) -> list[dict]:
     if not chunks:
         return []
     timeline = []
@@ -222,7 +219,7 @@ def _build_timeline(
     return timeline
 
 
-def _merge_segments(segs: List[Dict], min_gap: float) -> List[Dict]:
+def _merge_segments(segs: list[dict], min_gap: float) -> list[dict]:
     if not segs:
         return segs
     merged = [dict(segs[0])]
@@ -236,13 +233,13 @@ def _merge_segments(segs: List[Dict], min_gap: float) -> List[Dict]:
 
 
 def identify_speakers(
-    segments: List[Dict],
-    registry: Dict,
+    segments: list[dict],
+    registry: dict,
     embedder: SpeakerEmbedder,
     sample_rate: int,
     audio: np.ndarray,
     threshold: float = 0.50,
-) -> List[Dict]:
+) -> list[dict]:
     for seg in segments:
         spk = seg["speaker"]
         if spk < 0:

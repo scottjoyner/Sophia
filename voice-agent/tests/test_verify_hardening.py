@@ -2,7 +2,9 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+
 import pytest
+
 pytest.skip("Legacy hardening patcher tests retired; runtime coverage is kept.", allow_module_level=True)
 
 

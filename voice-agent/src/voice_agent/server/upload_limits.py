@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from fastapi import HTTPException, UploadFile
 
@@ -14,7 +14,7 @@ class UploadPolicy:
     allowed_suffixes: frozenset[str]
 
     @classmethod
-    def build(cls, name: str, max_bytes: int, allowed_suffixes: Iterable[str]) -> "UploadPolicy":
+    def build(cls, name: str, max_bytes: int, allowed_suffixes: Iterable[str]) -> UploadPolicy:
         return cls(
             name=name,
             max_bytes=max_bytes,

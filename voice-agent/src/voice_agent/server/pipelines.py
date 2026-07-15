@@ -1,32 +1,31 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
 
 import numpy as np
 
 from ..auth.verify import verify_audio_segment
 from ..config import AppConfig
-from ..llm.ralph_loop import RalphLoop
 from ..llm.intent import detect_voice_intent
+from ..llm.ralph_loop import RalphLoop
 from ..stt.faster_whisper_batch import refine_transcript
 from ..stt.faster_whisper_stream import StreamingTranscriber
 from ..tts.base import TextToSpeech
+from ..tts.coqui_tts import CoquiTTS
+from ..tts.openvoice_tts import OpenVoiceTTS
 from ..tts.piper_tts import PiperTTS
 from ..tts.pyttsx3_fallback import FallbackTTS
-from ..tts.openvoice_tts import OpenVoiceTTS
-from ..tts.coqui_tts import CoquiTTS
 from ..util.audio import write_wav
 from ..util.db import Database
 from ..util.logging import JsonlLogger
 from ..util.time import now_ms
 
-
-EventCallback = Callable[[str, Dict[str, object]], None]
+EventCallback = Callable[[str, dict[str, object]], None]
 
 
 class PipelineManager:
-    def __init__(self, config: AppConfig, base_dir: Path, event_callback: Optional[EventCallback] = None):
+    def __init__(self, config: AppConfig, base_dir: Path, event_callback: EventCallback | None = None):
         self.config = config
         self.base_dir = base_dir
         self._event_callback = event_callback
@@ -54,7 +53,7 @@ class PipelineManager:
                 return FallbackTTS(self.config)
         return FallbackTTS(self.config)
 
-    def _emit(self, event_type: str, payload: Dict[str, object]) -> None:
+    def _emit(self, event_type: str, payload: dict[str, object]) -> None:
         if self._event_callback:
             self._event_callback(event_type, payload)
 

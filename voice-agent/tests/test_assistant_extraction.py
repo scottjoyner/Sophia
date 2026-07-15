@@ -6,7 +6,7 @@ from voice_agent.server.assistant import Assistant
 
 def _assistant_with(content: str) -> Assistant:
     a = Assistant(AppConfig())
-    a.provider.complete = lambda prompt: type("R", (), {"content": content})()
+    a.provider.complete = lambda prompt, timeout=None: type("R", (), {"content": content})()
     return a
 
 

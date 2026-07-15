@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
@@ -31,7 +31,7 @@ def _sample_seconds(audio: np.ndarray, sample_rate: int) -> float:
     return float(len(audio) / sample_rate)
 
 
-def _validate_clip(path: str, audio: np.ndarray, sample_rate: int, min_seconds: float, max_seconds: float) -> Dict[str, Any]:
+def _validate_clip(path: str, audio: np.ndarray, sample_rate: int, min_seconds: float, max_seconds: float) -> dict[str, Any]:
     duration = _sample_seconds(audio, sample_rate)
     if duration < min_seconds:
         raise EnrollmentError(f"{path} is too short for enrollment: {duration:.2f}s < {min_seconds:.2f}s")
@@ -46,17 +46,17 @@ def _validate_clip(path: str, audio: np.ndarray, sample_rate: int, min_seconds: 
 def enroll_from_files(
     config: AppConfig,
     user_id: str,
-    files: List[str],
+    files: list[str],
     *,
     append: bool = False,
     source: str = "manual",
     min_seconds: float = 2.0,
     max_seconds: float = 30.0,
-    device_id: Optional[str] = None,
-) -> Dict[str, Any]:
+    device_id: str | None = None,
+) -> dict[str, Any]:
     registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite", config)
     embedder = SpeakerEmbedder()
-    
+
     # In append mode, we load existing samples to recalculate the mean and avoid duplicates.
     existing = None
     if append:
@@ -64,13 +64,13 @@ def enroll_from_files(
             existing = registry.get_device(user_id, device_id)
         else:
             existing = registry.get(user_id)
-        
+
     existing_samples = ((existing or {}).get("samples") or {}).get("samples") or []
     existing_by_sha = {sample.get("sha256") for sample in existing_samples if sample.get("sha256")}
 
-    embeddings: List[List[float]] = []
-    samples_meta: List[Dict[str, Any]] = []
-    errors: List[Dict[str, str]] = []
+    embeddings: list[list[float]] = []
+    samples_meta: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
     legacy_mean_preserved = False
 
     # Preserve existing sample weights by replaying stored per-sample embeddings when available.
@@ -125,7 +125,7 @@ def enroll_from_files(
         "errors": errors,
         "legacy_mean_preserved": legacy_mean_preserved,
     }
-    
+
     saved_record = (
         registry.save_device(
             user_id,
@@ -146,7 +146,7 @@ def enroll_from_files(
             append=append,
         )
     )
-        
+
     return {
         "user_id": user_id,
         "device_id": device_id,

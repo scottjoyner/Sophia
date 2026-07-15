@@ -1,0 +1,24 @@
+[run]
+branch = False
+source = voice_agent
+omit =
+    */tests/*
+    */tts/*
+    */stt/*
+    */llm/model_discovery.py
+    */llm/openai_compat_provider.py
+    cli.py
+    bench/*
+    */server/ws_protocol.py
+    */server/readiness.py
+    */auth/diarization.py
+    */auth/neo4j_schema.py
+    */auth/voiceprint_graph.py
+    */auth/neo4j_ingest.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:

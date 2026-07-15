@@ -1,58 +1,75 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import hmac
 import json
+import logging
 import os
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from ..auth.diarization import diarize, identify_speakers
 from ..auth.enroll import EnrollmentError, enroll_from_files
 from ..auth.neo4j_ingest import (
     collect_audio_paths_from_neo4j,
     list_recent_captures,
     save_capture_to_neo4j,
 )
-from ..auth.diarization import diarize, identify_speakers
-from ..auth.verify import verify_audio_segment
 from ..auth.registry import VoiceprintRegistry
 from ..auth.speaker_embedder import SpeakerEmbedder
+from ..auth.verify import verify_audio_segment
 from ..config import AppConfig, load_config
 from ..llm.intent import detect_voice_intent, intent_from_model_payload
 from ..llm.openai_compat_provider import OpenAICompatProvider
 from ..stt.faster_whisper_batch import refine_transcript
 from ..util.audio import b64decode, read_wav
 from ..util.time import now_ms
+from .assistant import Assistant
 from .assistx_dispatch import (
     ASSISTX_VOICE_WEBHOOK_BASE_URL,
     ASSISTX_VOICE_WEBHOOK_SECRET,
-    assistx_base_url as _assistx_voice_base_url,
-    assistx_webhook_url as _assistx_voice_webhook_url,
     build_voice_event,
     dispatch_to_assistx,
     json_dumps,
     sign_headers,
 )
-from .rate_limits import install_rate_limiter
-from .assistant import Assistant
+from .assistx_dispatch import (
+    assistx_base_url as _assistx_voice_base_url,
+)
+from .assistx_dispatch import (
+    assistx_webhook_url as _assistx_voice_webhook_url,
+)
 from .auth_session import (
     SESSION_COOKIE,
     SESSION_TTL_SECONDS,
     create_session_token,
-    login as auth_login_check,
     require_session,
     verify_session_token,
 )
-from .templates_loader import load_template, is_mobile_user_agent
+from .auth_session import (
+    login as auth_login_check,
+)
 from .events import EventBus, event_to_dict
 from .protocols import build_protocol_adapter
+from .rate_limits import install_rate_limiter
+from .request_hardening import install_request_hardening
 from .session_manager import SessionManager
+from .templates_loader import load_template
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +98,7 @@ class Neo4jEnrollRequest(BaseModel):
 class DispatchRequest(BaseModel):
     event_type: str = "voice_auth"
     text: str = ""
-    metadata: Dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
     auto_dispatch: bool = True
     target_url: str = ASSISTX_VOICE_WEBHOOK_BASE_URL
     target_token: str = ""
@@ -93,9 +110,9 @@ class AuthLoginRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    messages: List[Dict[str, Any]] = []
+    messages: list[dict[str, Any]] = []
     session_id: str = "console"
-    context: Dict[str, Any] = {}
+    context: dict[str, Any] = {}
 
 
 CAPTURE_PAGE = """<!doctype html>
@@ -755,7 +772,7 @@ CAPTURE_PAGE = """<!doctype html>
       const res = await fetch('/auth/verify', { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Verify failed');
-      
+
       lastScore = data.score;
       lastAccepted = data.accepted;
       lastAuthResult = {
@@ -775,7 +792,7 @@ CAPTURE_PAGE = """<!doctype html>
       showAuthResult(data.score, data.accepted, matchedDevice);
       renderAuthCandidates(data);
       renderExecutionTrace(null);
-      
+
       const fallbackMsg = data.fallback_used ? ' — fallback ' + (data.fallback_reason || 'historical candidate search') : '';
       const msg = data.accepted
         ? 'Voice verified ✓ score=' + data.score.toFixed(4) + matchedDevice + fallbackMsg
@@ -1581,7 +1598,7 @@ def _cleanup_paths(*paths: Path) -> None:
 
 class MeetingTaskManager:
     def __init__(self):
-        self._tasks: Dict[str, Dict[str, Any]] = {}
+        self._tasks: dict[str, dict[str, Any]] = {}
 
     def create(self, task_id: str) -> None:
         self._tasks[task_id] = {
@@ -1605,7 +1622,7 @@ class MeetingTaskManager:
         if error is not None:
             t["error"] = error
 
-    def get(self, task_id: str) -> Dict[str, Any] | None:
+    def get(self, task_id: str) -> dict[str, Any] | None:
         return self._tasks.get(task_id)
 
 
@@ -1772,6 +1789,7 @@ async def _background_extract(assistant, conversation: str, session_id: str, use
 def create_app(config: AppConfig) -> FastAPI:
     app = FastAPI(title="Sophia Voice Agent", version="0.1.0")
     install_rate_limiter(app)
+    install_request_hardening(app)
     bus = EventBus()
     manager = SessionManager(
         config,
@@ -1846,7 +1864,7 @@ def create_app(config: AppConfig) -> FastAPI:
         location_accuracy_m: str,
         activity_context: str,
         detected,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         try:
             parsed = json.loads(client_context) if client_context else {}
         except json.JSONDecodeError:
@@ -1876,7 +1894,7 @@ def create_app(config: AppConfig) -> FastAPI:
         }
         return context
 
-    def _log_voice_ui_event_to_neo4j(event_type: str, payload: Dict[str, Any]) -> bool:
+    def _log_voice_ui_event_to_neo4j(event_type: str, payload: dict[str, Any]) -> bool:
         if not config.neo4j.password:
             return False
         try:
@@ -1916,7 +1934,7 @@ def create_app(config: AppConfig) -> FastAPI:
     def _voiceprint_registry() -> VoiceprintRegistry:
         return VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite", config)
 
-    def _neo4j_write_status() -> Dict[str, Any]:
+    def _neo4j_write_status() -> dict[str, Any]:
         password_configured = bool(config.neo4j.password)
         return {
             "uri": config.neo4j.uri,
@@ -1930,29 +1948,20 @@ def create_app(config: AppConfig) -> FastAPI:
         }
 
     @app.get("/", response_class=HTMLResponse)
-    async def homepage(request: Request) -> HTMLResponse:
-        # Auto-detect device class: phones/tablets get the voice-first mobile app,
-        # everything else gets the full desktop console. Explicit /desktop and /m
-        # routes below let the user override the choice.
-        if is_mobile_user_agent(request.headers.get("user-agent")):
-            return RedirectResponse("/m", status_code=302)
+    async def homepage() -> HTMLResponse:
+        # Single responsive SPA: one UI for every device class. The legacy
+        # capture/meeting/dispatch page is still available at /legacy.
         return HTMLResponse(
-            load_template("desktop.html"),
+            load_template("index.html"),
             headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
         )
 
     @app.get("/desktop", response_class=HTMLResponse)
-    async def desktop_homepage() -> HTMLResponse:
-        return HTMLResponse(
-            load_template("desktop.html"),
-            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
-        )
-
     @app.get("/m", response_class=HTMLResponse)
     @app.get("/mobile", response_class=HTMLResponse)
-    async def mobile_homepage() -> HTMLResponse:
+    async def unified_homepage() -> HTMLResponse:
         return HTMLResponse(
-            load_template("mobile.html"),
+            load_template("index.html"),
             headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
         )
 
@@ -1967,7 +1976,7 @@ def create_app(config: AppConfig) -> FastAPI:
         )
 
     @app.get("/auth/session")
-    async def auth_session(request: Request) -> Dict[str, Any]:
+    async def auth_session(request: Request) -> dict[str, Any]:
         token = request.cookies.get(SESSION_COOKIE)
         authed = verify_session_token(token)
         return {
@@ -2064,6 +2073,9 @@ def create_app(config: AppConfig) -> FastAPI:
             except Exception as exc:
                 yield "data: " + json.dumps({"type": "error", "error": f"stream failed: {type(exc).__name__}: {exc}"}) + "\n\n"
                 return
+            endpoint = getattr(assistant, "_last_chat_endpoint", None)
+            if endpoint:
+                yield "data: " + json.dumps({"type": "meta", "endpoint": endpoint}) + "\n\n"
             yield "data: " + json.dumps({"type": "done"}) + "\n\n"
 
         return StreamingResponse(
@@ -2073,11 +2085,11 @@ def create_app(config: AppConfig) -> FastAPI:
         )
 
     @app.get("/healthz")
-    async def healthz() -> Dict[str, Any]:
+    async def healthz() -> dict[str, Any]:
         return {"ok": True, "service": "sophia-voice-agent"}
 
     @app.get("/readyz")
-    async def readyz() -> Dict[str, Any]:
+    async def readyz() -> dict[str, Any]:
         artifacts = Path(config.paths.artifacts_dir)
         return {
             "ok": artifacts.exists() and artifacts.is_dir(),
@@ -2086,7 +2098,7 @@ def create_app(config: AppConfig) -> FastAPI:
         }
 
     @app.get("/status")
-    async def status() -> Dict[str, Any]:
+    async def status() -> dict[str, Any]:
         return {
             "service": "sophia-voice-agent",
             "protocol": config.server.protocol,
@@ -2107,6 +2119,8 @@ def create_app(config: AppConfig) -> FastAPI:
                 "assistant_model": app.state.assistant.model_label,
                 "fleet_discovery": app.state.assistant.discoverer is not None,
                 "fleet": app.state.assistant.discoverer.snapshot() if app.state.assistant.discoverer else None,
+                "last_chat_endpoint": getattr(app.state.assistant, "_last_chat_endpoint", None),
+                "last_task_endpoint": getattr(app.state.assistant, "_last_task_endpoint", None),
             },
             "tts": {"backend": config.tts.backend},
             "memory_graph": _neo4j_write_status(),
@@ -2123,7 +2137,7 @@ def create_app(config: AppConfig) -> FastAPI:
         }
 
     @app.get("/memory-graph/status")
-    async def memory_graph_status() -> Dict[str, Any]:
+    async def memory_graph_status() -> dict[str, Any]:
         return _neo4j_write_status()
 
     @app.post("/auth/verify")
@@ -2131,7 +2145,7 @@ def create_app(config: AppConfig) -> FastAPI:
         audio: UploadFile = File(...),
         user_id: str = Form(default="default"),
         session_id: str = Form(default="mobile"),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         src_path = await _save_upload_for_audio_processing(config, audio, "verify")
         wav_path = src_path
         try:
@@ -2153,7 +2167,7 @@ def create_app(config: AppConfig) -> FastAPI:
         user_id: str = Form(default="default"),
         force: bool = Form(default=False),
         device_id: str = Form(default=""),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         enroll_dir = Path(config.paths.capture_dir or (Path(config.paths.artifacts_dir) / "captures")) / "voiceprint_enroll"
         enroll_dir.mkdir(parents=True, exist_ok=True)
         suffix = _safe_upload_suffix(audio, default=".webm")
@@ -2191,7 +2205,7 @@ def create_app(config: AppConfig) -> FastAPI:
         return {"ok": True, **payload}
 
     @app.post("/llm/test")
-    async def llm_test() -> Dict[str, Any]:
+    async def llm_test() -> dict[str, Any]:
         try:
             prov = intent_provider or manager.pipeline.ralph.provider
             resp = prov.complete("Say exactly: LLM_OK")
@@ -2201,12 +2215,12 @@ def create_app(config: AppConfig) -> FastAPI:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "provider": type(intent_provider or manager.pipeline.ralph.provider).__name__}
 
     @app.get("/events")
-    async def events(after_id: int = 0, session_id: str | None = None) -> Dict[str, Any]:
+    async def events(after_id: int = 0, session_id: str | None = None) -> dict[str, Any]:
         records = bus.snapshot(after_id=after_id, session_id=session_id)
         return {"events": [event_to_dict(event) for event in records]}
 
     @app.post("/intent")
-    async def intent(req: IntentRequest) -> Dict[str, Any]:
+    async def intent(req: IntentRequest) -> dict[str, Any]:
         detected = _detect_intent(req.transcript)
         return {
             "intent": detected.name,
@@ -2217,7 +2231,7 @@ def create_app(config: AppConfig) -> FastAPI:
         }
 
     @app.post("/voice-chat")
-    async def voice_chat(req: VoiceChatRequest) -> Dict[str, Any]:
+    async def voice_chat(req: VoiceChatRequest) -> dict[str, Any]:
         detected = _detect_intent(req.transcript)
         voice_input = (
             f"Voice input detected. Intent: {detected.name} (confidence {detected.confidence:.2f}).\n"
@@ -2259,7 +2273,7 @@ def create_app(config: AppConfig) -> FastAPI:
         location_lng: str = Form(default=""),
         location_accuracy_m: str = Form(default=""),
         activity_context: str = Form(default=""),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         capture_id = uuid.uuid4().hex
         captures_dir = Path(config.paths.capture_dir or (Path(config.paths.artifacts_dir) / "captures"))
         captures_dir.mkdir(parents=True, exist_ok=True)
@@ -2349,8 +2363,8 @@ def create_app(config: AppConfig) -> FastAPI:
         return {"ok": True, **payload}
 
     @app.get("/captures")
-    async def list_captures(request: Request, limit: int = 50, user_id: str = "") -> Dict[str, Any]:
-        user = require_session(request)
+    async def list_captures(request: Request, limit: int = 50, user_id: str = "") -> dict[str, Any]:
+        require_session(request)
         if not config.neo4j.password:
             return {"ok": False, "error": "Neo4j password not configured", "captures": []}
         try:
@@ -2379,7 +2393,7 @@ def create_app(config: AppConfig) -> FastAPI:
         device_fingerprint: str = Form(default=""),
         client_context: str = Form(default=""),
         activity_context: str = Form(default=""),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         _require_owner_override(config, user_id, admin_key)
         capture_id = uuid.uuid4().hex
         override_dir = Path(config.paths.capture_dir or (Path(config.paths.artifacts_dir) / "captures")) / "voiceprint_override"
@@ -2431,7 +2445,7 @@ def create_app(config: AppConfig) -> FastAPI:
         return {"ok": True, **payload}
 
     @app.get("/voiceprints/linkage")
-    async def voiceprints_linkage() -> Dict[str, Any]:
+    async def voiceprints_linkage() -> dict[str, Any]:
         owner = config.auth.owner_user_id
         try:
             registry = _voiceprint_registry()
@@ -2462,7 +2476,7 @@ def create_app(config: AppConfig) -> FastAPI:
         request: Request,
         user_id: str = Form(default="scott"),
         admin_key: str = Form(default=""),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         _require_owner_override(config, user_id, admin_key)
         registry = _voiceprint_registry()
         rec = registry.get(user_id)
@@ -2485,7 +2499,7 @@ def create_app(config: AppConfig) -> FastAPI:
         request: Request,
         admin_key: str = Form(default=""),
         match_threshold: float = Form(default=0.85),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         _require_owner_override(config, config.auth.owner_user_id, admin_key)
         registry = _voiceprint_registry()
         if not registry.graph:
@@ -2500,7 +2514,7 @@ def create_app(config: AppConfig) -> FastAPI:
         request: Request,
         admin_key: str = Form(default=""),
         force: bool = Form(default=False),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         _require_owner_override(config, config.auth.owner_user_id, admin_key)
         registry = _voiceprint_registry()
         if not registry.graph:
@@ -2511,7 +2525,7 @@ def create_app(config: AppConfig) -> FastAPI:
             raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
 
     @app.post("/voiceprints/train-neo4j")
-    async def train_voiceprint_from_neo4j(req: Neo4jEnrollRequest) -> Dict[str, Any]:
+    async def train_voiceprint_from_neo4j(req: Neo4jEnrollRequest) -> dict[str, Any]:
         uri = req.neo4j_uri or config.neo4j.uri
         user = req.neo4j_user or config.neo4j.user
         password = req.neo4j_pass or config.neo4j.password
@@ -2546,7 +2560,7 @@ def create_app(config: AppConfig) -> FastAPI:
         audio: UploadFile | None = File(default=None),
         summarize: bool = Form(default=True),
         max_speakers: int | None = Form(default=None),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if audio is None:
             raise HTTPException(status_code=400, detail="audio file is required")
         task_id = uuid.uuid4().hex
@@ -2561,14 +2575,14 @@ def create_app(config: AppConfig) -> FastAPI:
         return {"ok": True, "task_id": task_id}
 
     @app.get("/meeting/status/{task_id}")
-    async def meeting_status(task_id: str) -> Dict[str, Any]:
+    async def meeting_status(task_id: str) -> dict[str, Any]:
         t = meeting_tasks.get(task_id)
         if t is None:
             raise HTTPException(status_code=404, detail="Task not found")
         return t
 
     @app.get("/meeting/history")
-    async def meeting_history(limit: int = 20) -> Dict[str, Any]:
+    async def meeting_history(limit: int = 20) -> dict[str, Any]:
         if not config.neo4j.password:
             return {"meetings": [], "error": "Neo4j not configured"}
         try:
@@ -2601,7 +2615,7 @@ def create_app(config: AppConfig) -> FastAPI:
             return {"meetings": [], "error": f"{type(exc).__name__}: {exc}"}
 
     @app.get("/meeting/history/{meeting_id}")
-    async def meeting_detail(meeting_id: str) -> Dict[str, Any]:
+    async def meeting_detail(meeting_id: str) -> dict[str, Any]:
         if not config.neo4j.password:
             return {"error": "Neo4j not configured"}
         try:
@@ -2635,7 +2649,7 @@ def create_app(config: AppConfig) -> FastAPI:
             return {"error": f"{type(exc).__name__}: {exc}"}
 
     @app.get("/voiceprints/status")
-    async def voiceprints_status() -> Dict[str, Any]:
+    async def voiceprints_status() -> dict[str, Any]:
         try:
             users = []
             registry = _voiceprint_registry()
@@ -2667,7 +2681,7 @@ def create_app(config: AppConfig) -> FastAPI:
             return {"users": [], "error": f"{type(exc).__name__}: {exc}"}
 
     @app.delete("/voiceprints/device/{user_id}/{device_id}")
-    async def voiceprints_delete_device(user_id: str, device_id: str) -> Dict[str, Any]:
+    async def voiceprints_delete_device(user_id: str, device_id: str) -> dict[str, Any]:
         try:
             deleted = _voiceprint_registry().delete_device(user_id, device_id)
             return {"ok": True, "user_id": user_id, "device_id": device_id, "deleted": deleted}
@@ -2675,7 +2689,7 @@ def create_app(config: AppConfig) -> FastAPI:
             raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
 
     @app.delete("/meeting/history/{meeting_id}")
-    async def meeting_delete(meeting_id: str) -> Dict[str, Any]:
+    async def meeting_delete(meeting_id: str) -> dict[str, Any]:
         if not config.neo4j.password:
             raise HTTPException(status_code=400, detail="Neo4j not configured")
         from neo4j import GraphDatabase
@@ -2691,7 +2705,7 @@ def create_app(config: AppConfig) -> FastAPI:
     dispatch_history: list = []
 
     @app.get("/dispatch/status")
-    async def dispatch_status() -> Dict[str, Any]:
+    async def dispatch_status() -> dict[str, Any]:
         import httpx
 
         base = _assistx_voice_base_url()
@@ -2723,7 +2737,7 @@ def create_app(config: AppConfig) -> FastAPI:
         }
 
     @app.post("/dispatch/to-assistx")
-    async def dispatch_to_assistx_route(req: DispatchRequest) -> Dict[str, Any]:
+    async def dispatch_to_assistx_route(req: DispatchRequest) -> dict[str, Any]:
         metadata = req.metadata if req.metadata and any(k for k in req.metadata if req.metadata[k]) else None
         actor = {
             "user_id": (metadata or {}).get("user_id", "scott"),
@@ -2745,7 +2759,7 @@ def create_app(config: AppConfig) -> FastAPI:
         return result
 
     @app.get("/dispatch/trace/{correlation_id}")
-    async def dispatch_trace(correlation_id: str) -> Dict[str, Any]:
+    async def dispatch_trace(correlation_id: str) -> dict[str, Any]:
         import httpx
         base = _assistx_voice_base_url()
         trace_url = f"{base}/api/traces/{correlation_id}"
@@ -2781,7 +2795,7 @@ def create_app(config: AppConfig) -> FastAPI:
         try:
             while True:
                 message = await websocket.receive_text()
-                data: Dict[str, Any] = json.loads(message)
+                data: dict[str, Any] = json.loads(message)
                 before_event_id = bus.snapshot()[-1].id if bus.snapshot() else 0
                 normalized = protocol.decode(data)
                 msg_type = normalized.msg_type

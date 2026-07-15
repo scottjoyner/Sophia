@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from .time import now_ms
 
@@ -12,7 +12,7 @@ class JsonlLogger:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def log(self, event_type: str, payload: Dict[str, Any]) -> None:
+    def log(self, event_type: str, payload: dict[str, Any]) -> None:
         record = {
             "ts_ms": now_ms(),
             "type": event_type,

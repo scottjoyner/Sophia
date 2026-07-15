@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List
-
 import importlib.util
+from dataclasses import dataclass
+
 import numpy as np
 
 
@@ -27,9 +26,9 @@ class EnergyVad:
         self.last_voice_ms = 0
         self.cursor_ms = 0
 
-    def process(self, samples: np.ndarray, chunk_ms: int) -> List[VadSegment]:
+    def process(self, samples: np.ndarray, chunk_ms: int) -> list[VadSegment]:
         energy = float(np.mean(np.abs(samples)))
-        segments: List[VadSegment] = []
+        segments: list[VadSegment] = []
         if energy >= self.energy_threshold:
             if not self.in_speech:
                 self.in_speech = True
@@ -44,8 +43,8 @@ class EnergyVad:
         self.cursor_ms += chunk_ms
         return segments
 
-    def flush(self) -> List[VadSegment]:
-        segments: List[VadSegment] = []
+    def flush(self) -> list[VadSegment]:
+        segments: list[VadSegment] = []
         if self.in_speech:
             end_ms = self.last_voice_ms
             if end_ms - self.speech_start_ms >= self.min_speech_ms:
@@ -76,10 +75,10 @@ class WebrtcVad:
         self.last_voice_ms = 0
         self.cursor_ms = 0
 
-    def process(self, samples: np.ndarray, chunk_ms: int) -> List[VadSegment]:
+    def process(self, samples: np.ndarray, chunk_ms: int) -> list[VadSegment]:
         pcm = (samples * 32767.0).astype(np.int16).tobytes()
         is_speech = self.vad.is_speech(pcm, self.sample_rate)
-        segments: List[VadSegment] = []
+        segments: list[VadSegment] = []
         if is_speech:
             if not self.in_speech:
                 self.in_speech = True
@@ -94,8 +93,8 @@ class WebrtcVad:
         self.cursor_ms += chunk_ms
         return segments
 
-    def flush(self) -> List[VadSegment]:
-        segments: List[VadSegment] = []
+    def flush(self) -> list[VadSegment]:
+        segments: list[VadSegment] = []
         if self.in_speech:
             end_ms = self.last_voice_ms
             if end_ms - self.speech_start_ms >= self.min_speech_ms:

@@ -4,7 +4,8 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+from collections.abc import Iterator
+from typing import Any
 
 from ..config import AppConfig
 from ..llm.openai_compat_provider import LLMProviderError, OpenAICompatProvider
@@ -34,9 +35,11 @@ class Assistant:
         self.config = config
         self.provider = self._build_provider()
         self.discoverer = None
-        self._provider_cache: Dict[str, LLMProvider] = {}
-        self._failed_endpoints: Dict[str, float] = {}
+        self._provider_cache: dict[str, LLMProvider] = {}
+        self._failed_endpoints: dict[str, float] = {}
         self._endpoint_cooldown = 120.0
+        self._last_chat_endpoint = None
+        self._last_task_endpoint = None
         if getattr(config.llm, "fleet_discovery", False):
             self._init_fleet()
 
@@ -61,7 +64,7 @@ class Assistant:
             logging.getLogger(__name__).warning("fleet discovery failed to start: %s", exc)
             self.discoverer = None
 
-    def _provider_for(self, ep) -> Optional[LLMProvider]:
+    def _provider_for(self, ep) -> LLMProvider | None:
         if ep is None:
             return None
         key = ep.full_id
@@ -149,10 +152,10 @@ class Assistant:
             return self.provider.model
         return "mock"
 
-    def _format_context(self, context: Optional[Dict[str, Any]]) -> str:
+    def _format_context(self, context: dict[str, Any] | None) -> str:
         if not context:
             return ""
-        parts: List[str] = []
+        parts: list[str] = []
         loc = context.get("location") or {}
         if loc.get("lat") is not None:
             s = f"User location: {loc.get('lat')}, {loc.get('lng')}"
@@ -171,8 +174,8 @@ class Assistant:
             parts.append(str(context.get("note")))
         return "\n".join(parts)
 
-    def _prepare_messages(self, messages: List[Dict[str, Any]], context: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        msgs: List[Dict[str, Any]] = [dict(m) for m in messages]
+    def _prepare_messages(self, messages: list[dict[str, Any]], context: dict[str, Any] | None) -> list[dict[str, Any]]:
+        msgs: list[dict[str, Any]] = [dict(m) for m in messages]
         ctx_str = self._format_context(context)
         if ctx_str:
             msgs.insert(0, {
@@ -191,7 +194,7 @@ class Assistant:
             for m in msgs:
                 if m.get("role") == "user":
                     text = m.get("content", "") if isinstance(m.get("content"), str) else ""
-                    content: List[Dict[str, Any]] = [{"type": "text", "text": text}]
+                    content: list[dict[str, Any]] = [{"type": "text", "text": text}]
                     for img in images:
                         url = img.get("url")
                         if not url and img.get("data"):
@@ -202,12 +205,13 @@ class Assistant:
                     break
         return msgs
 
-    def stream_reply(self, messages: List[Dict[str, Any]], context: Optional[Dict[str, Any]] = None) -> Iterator[str]:
+    def stream_reply(self, messages: list[dict[str, Any]], context: dict[str, Any] | None = None) -> Iterator[str]:
         msgs = self._prepare_messages(messages, context)
         eps = self._candidate_endpoints("chat")
         if not eps:
             try:
                 yield from self.provider.stream_complete(msgs)
+                self._last_chat_endpoint = "config:" + getattr(self.provider, "model", "config")
                 return
             except Exception as exc:
                 logger.warning("configured chat provider failed: %s", exc)
@@ -215,9 +219,9 @@ class Assistant:
         for ep in eps:
             provider = self._provider_for(ep) or self.provider
             try:
-                for delta in provider.stream_complete(msgs):
-                    yield delta
+                yield from provider.stream_complete(msgs)
                 self.discoverer._mark_used(ep)
+                self._last_chat_endpoint = ep.full_id
                 return
             except Exception as exc:
                 self._mark_failed(ep)
@@ -225,7 +229,7 @@ class Assistant:
                 continue
         raise LLMProviderError("all chat endpoints failed")
 
-    def extract_tasks(self, conversation: str, context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    def extract_tasks(self, conversation: str, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         if not conversation.strip():
             return []
         prompt = TASK_EXTRACTION_PROMPT.replace("{conversation}", conversation)
@@ -245,6 +249,9 @@ class Assistant:
                 raw = provider.complete(prompt, timeout=extract_timeout).content
                 if ep is not None:
                     self.discoverer._mark_used(ep)
+                    self._last_task_endpoint = ep.full_id
+                else:
+                    self._last_task_endpoint = "config:" + getattr(self.provider, "model", "config")
                 return _parse_task_list(raw)
             except Exception as exc:
                 if ep is not None:
@@ -255,12 +262,12 @@ class Assistant:
 
     def ingest_tasks(
         self,
-        tasks: List[Dict[str, Any]],
+        tasks: list[dict[str, Any]],
         *,
-        session_id: Optional[str] = "console",
-        actor: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
-        results: List[Dict[str, Any]] = []
+        session_id: str | None = "console",
+        actor: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
         for task in tasks:
             text = task.get("title") or task.get("description") or "Untitled task"
             metadata = {
@@ -288,7 +295,7 @@ class Assistant:
         return results
 
 
-def _parse_task_list(raw: str) -> List[Dict[str, Any]]:
+def _parse_task_list(raw: str) -> list[dict[str, Any]]:
     if not raw:
         return []
     text = raw.strip()
@@ -315,7 +322,7 @@ def _parse_task_list(raw: str) -> List[Dict[str, Any]]:
             return []
     if not isinstance(data, list):
         return []
-    cleaned: List[Dict[str, Any]] = []
+    cleaned: list[dict[str, Any]] = []
     for item in data:
         if not isinstance(item, dict):
             continue

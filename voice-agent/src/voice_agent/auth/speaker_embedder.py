@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from typing import List
 
 import numpy as np
 
@@ -67,7 +66,7 @@ class SpeakerEmbedder:
             target_x = np.linspace(0.0, duration, num=target_len, endpoint=False)
             return np.interp(target_x, source_x, samples).astype(np.float32)
 
-    def embed(self, samples: np.ndarray, sample_rate: int) -> List[float]:
+    def embed(self, samples: np.ndarray, sample_rate: int) -> list[float]:
         audio = self._prepare_audio(samples, sample_rate)
         if self.model is None:
             mean = float(np.mean(audio)) if audio.size else 0.0
@@ -79,7 +78,7 @@ class SpeakerEmbedder:
             vec[1] = std
             vec[2] = energy
             return vec.tolist()
-            
+
         import torch
         tensor = torch.tensor(audio, dtype=torch.float32).unsqueeze(0)
         embedding = self.model.encode_batch(tensor).squeeze().cpu().numpy()

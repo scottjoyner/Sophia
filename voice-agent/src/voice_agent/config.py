@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -11,11 +10,11 @@ from pydantic import BaseModel, Field
 class AuthConfig(BaseModel):
     threshold: float = 0.75
     require_challenge: bool = False
-    challenge_phrases_file: Optional[str] = None
+    challenge_phrases_file: str | None = None
     owner_user_id: str = "scott"
     owner_override_enabled: bool = False
-    owner_override_token: Optional[str] = None
-    owner_override_token_file: Optional[str] = None
+    owner_override_token: str | None = None
+    owner_override_token_file: str | None = None
     owner_append_min_seconds: float = 2.0
     owner_append_max_seconds: float = 30.0
     global_speaker_link_enabled: bool = True
@@ -48,21 +47,21 @@ class VADConfig(BaseModel):
 
 class LLMConfig(BaseModel):
     provider: str = "mock"
-    base_url: Optional[str] = None
-    api_key: Optional[str] = None
+    base_url: str | None = None
+    api_key: str | None = None
     model: str = "local-model"
     intent_provider: str = "mock"
-    intent_base_url: Optional[str] = None
-    intent_api_key: Optional[str] = None
+    intent_base_url: str | None = None
+    intent_api_key: str | None = None
     intent_model: str = "draft-model"
-    task_model: Optional[str] = None
+    task_model: str | None = None
     timeout: float = 60.0
-    task_timeout: Optional[float] = None
-    task_extract_timeout: Optional[float] = None
+    task_timeout: float | None = None
+    task_extract_timeout: float | None = None
     fleet_discovery: bool = False
     fleet_node_port: int = 1234
-    fleet_router_url: Optional[str] = None
-    fleet_candidate_nodes: Optional[str] = None
+    fleet_router_url: str | None = None
+    fleet_candidate_nodes: str | None = None
     fleet_refresh_interval: float = 30.0
     fleet_chat_max_params: float = 4.0
     fleet_task_min_params: float = 20.0
@@ -74,17 +73,17 @@ class LLMConfig(BaseModel):
 
 class TTSConfig(BaseModel):
     backend: str = "fallback"
-    voice: Optional[str] = None
-    openvoice_model_path: Optional[str] = None
+    voice: str | None = None
+    openvoice_model_path: str | None = None
     coqui_model_name: str = "tts_models/multilingual/multi-dataset/xtts_v2"
-    speaker_wav: Optional[str] = None
+    speaker_wav: str | None = None
     use_gpu: bool = False
 
 
 class PathsConfig(BaseModel):
     artifacts_dir: str = "runs"
     workspace_dir: str = "workspace"
-    capture_dir: Optional[str] = None
+    capture_dir: str | None = None
 
 
 class ServerConfig(BaseModel):
@@ -101,10 +100,10 @@ class RuntimeConfig(BaseModel):
 class Neo4jConfig(BaseModel):
     uri: str = "bolt://host.docker.internal:7687"
     user: str = "neo4j"
-    password: Optional[str] = None
-    password_file: Optional[str] = None
+    password: str | None = None
+    password_file: str | None = None
     database: str = "memory"
-    default_speaker_name: Optional[str] = None
+    default_speaker_name: str | None = None
 
 
 class AppConfig(BaseModel):
@@ -119,7 +118,7 @@ class AppConfig(BaseModel):
     neo4j: Neo4jConfig = Field(default_factory=Neo4jConfig)
 
 
-def load_config(path: Optional[str]) -> AppConfig:
+def load_config(path: str | None) -> AppConfig:
     if not path:
         return _apply_env(AppConfig())
     data = yaml.safe_load(Path(path).read_text())

@@ -6,7 +6,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -14,7 +14,7 @@ class GraphOutboxItem:
     id: str
     kind: str
     idempotency_key: str
-    payload: Dict[str, Any]
+    payload: dict[str, Any]
     status: str
     attempts: int
     next_attempt_ms: int
@@ -22,7 +22,7 @@ class GraphOutboxItem:
     updated_at_ms: int
     last_error: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "kind": self.kind,
@@ -83,7 +83,7 @@ class GraphOutbox:
                 """
             )
 
-    def enqueue(self, *, kind: str, idempotency_key: str, payload: Dict[str, Any], error: str = "") -> GraphOutboxItem:
+    def enqueue(self, *, kind: str, idempotency_key: str, payload: dict[str, Any], error: str = "") -> GraphOutboxItem:
         now = self.now_ms()
         item_id = uuid.uuid4().hex
         payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
@@ -119,7 +119,7 @@ class GraphOutbox:
             ).fetchone()
         return self._row_to_item(row) if row else None
 
-    def list_due(self, *, limit: int = 25, now_ms: int | None = None) -> List[GraphOutboxItem]:
+    def list_due(self, *, limit: int = 25, now_ms: int | None = None) -> list[GraphOutboxItem]:
         now = self.now_ms() if now_ms is None else now_ms
         with self._connect() as conn:
             rows = conn.execute(
@@ -172,14 +172,14 @@ class GraphOutbox:
                 (attempts, now + delay, now, error[:1000], item_id),
             )
 
-    def counts(self) -> Dict[str, int]:
+    def counts(self) -> dict[str, int]:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT status, count(*) AS n FROM pending_graph_writes GROUP BY status"
             ).fetchall()
         return {str(row["status"]): int(row["n"]) for row in rows}
 
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         counts = self.counts()
         due = self.due_count()
         pending_total = int(counts.get("pending", 0)) + int(counts.get("retry", 0))
@@ -226,7 +226,7 @@ def replay_graph_outbox_items(
     neo4j_password: str,
     neo4j_database: str | None = None,
     limit: int = 25,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Replay due outbox items to Neo4j.
 
     Currently supports capture writes. Additional kinds should be added only when
@@ -241,7 +241,7 @@ def replay_graph_outbox_items(
     from ..auth.neo4j_ingest import save_capture_to_neo4j
 
     processed = succeeded = failed = 0
-    errors: List[Dict[str, str]] = []
+    errors: list[dict[str, str]] = []
     for item in due_items:
         processed += 1
         try:

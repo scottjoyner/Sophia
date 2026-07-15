@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any
 
 from ..config import AppConfig
 from ..util.db import Database
@@ -27,7 +28,7 @@ class VoiceprintRegistry:
         self.graph = VoiceprintGraphStore.from_config(config.neo4j) if config else None
 
     @staticmethod
-    def _sample_count(samples: Dict[str, Any] | None) -> int:
+    def _sample_count(samples: dict[str, Any] | None) -> int:
         if not samples:
             return 0
         return len(samples.get("samples") or [])
@@ -36,11 +37,11 @@ class VoiceprintRegistry:
     def _sqlite_record(
         user_id: str,
         embedding_mean: Iterable[float],
-        samples: Dict[str, Any],
+        samples: dict[str, Any],
         threshold: float,
         *,
         device_id: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return {
             "user_id": user_id,
             "device_id": device_id,
@@ -53,7 +54,7 @@ class VoiceprintRegistry:
         }
 
     @staticmethod
-    def _normalize_graph_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_graph_record(record: dict[str, Any]) -> dict[str, Any]:
         samples = record.get("samples")
         if not isinstance(samples, dict):
             samples_json = record.get("samples_json")
@@ -84,7 +85,7 @@ class VoiceprintRegistry:
         }
 
     @staticmethod
-    def _normalize_candidate_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_candidate_record(record: dict[str, Any]) -> dict[str, Any]:
         samples = record.get("samples")
         if not isinstance(samples, dict):
             samples_json = record.get("samples_json")
@@ -128,7 +129,7 @@ class VoiceprintRegistry:
         self,
         user_id: str,
         embedding_mean: Iterable[float],
-        samples: Dict[str, Any],
+        samples: dict[str, Any],
         threshold: float,
         *,
         source: str = "manual",
@@ -136,8 +137,8 @@ class VoiceprintRegistry:
         device_id: str | None = None,
         capture_id: str | None = None,
         session_id: str | None = None,
-    ) -> Dict[str, Any]:
-        graph_result: Dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        graph_result: dict[str, Any] | None = None
         graph_error: str | None = None
         if self.graph:
             try:
@@ -166,7 +167,7 @@ class VoiceprintRegistry:
         record["speaker_linkage"] = (graph_result or {}).get("speaker_linkage")
         return record
 
-    def get(self, user_id: str) -> Dict[str, Any] | None:
+    def get(self, user_id: str) -> dict[str, Any] | None:
         if self.graph:
             try:
                 record = self.graph.get_active_record(user_id)
@@ -176,7 +177,7 @@ class VoiceprintRegistry:
                 pass
         return self.db.fetch_voiceprint(user_id)
 
-    def get_device(self, user_id: str, device_id: str) -> Dict[str, Any] | None:
+    def get_device(self, user_id: str, device_id: str) -> dict[str, Any] | None:
         if self.graph:
             try:
                 record = self.graph.get_device_record(user_id, device_id)
@@ -192,14 +193,14 @@ class VoiceprintRegistry:
         user_id: str,
         device_id: str,
         embedding_mean: Iterable[float],
-        samples: Dict[str, Any],
+        samples: dict[str, Any],
         threshold: float,
         *,
         source: str = "manual",
         append: bool = False,
         capture_id: str | None = None,
         session_id: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return self.save(
             user_id,
             embedding_mean,
@@ -212,12 +213,12 @@ class VoiceprintRegistry:
             session_id=session_id,
         )
 
-    def get_devices(self, user_id: str) -> Dict[str, Dict[str, Any]]:
+    def get_devices(self, user_id: str) -> dict[str, dict[str, Any]]:
         if self.graph:
             try:
                 records = self.graph.get_active_records(user_id)
                 if records:
-                    devices: Dict[str, Dict[str, Any]] = {}
+                    devices: dict[str, dict[str, Any]] = {}
                     for record in records:
                         if record.get("scope") != "device":
                             continue
@@ -229,11 +230,11 @@ class VoiceprintRegistry:
                 pass
         return self.db.fetch_device_voiceprints(user_id)
 
-    def list_devices(self, user_id: str) -> List[str]:
+    def list_devices(self, user_id: str) -> list[str]:
         devices = self.get_devices(user_id)
         return list(devices.keys())
 
-    def get_best(self, user_id: str) -> Dict[str, Any] | None:
+    def get_best(self, user_id: str) -> dict[str, Any] | None:
         record = self.get(user_id)
         if record:
             record["device_id"] = "default"
@@ -246,12 +247,12 @@ class VoiceprintRegistry:
         first["device_id"] = first_device_id
         return first
 
-    def get_all_for_user(self, user_id: str) -> List[Dict[str, Any]]:
+    def get_all_for_user(self, user_id: str) -> list[dict[str, Any]]:
         if self.graph:
             try:
                 records = self.graph.get_active_records(user_id)
                 if records:
-                    result: List[Dict[str, Any]] = []
+                    result: list[dict[str, Any]] = []
                     for record in records:
                         normalized = self._normalize_graph_record(record)
                         if normalized.get("scope") == "identity":
@@ -274,7 +275,7 @@ class VoiceprintRegistry:
         user_id: str,
         query_embedding: Iterable[float] | None = None,
         top_k: int = 5,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         if self.graph:
             try:
                 if query_embedding is not None:
@@ -294,7 +295,7 @@ class VoiceprintRegistry:
         samples = record.get("samples") or {}
         return len(samples.get("samples") or [])
 
-    def list_users(self) -> List[str]:
+    def list_users(self) -> list[str]:
         users: set[str] = set()
         if self.graph:
             try:
@@ -325,17 +326,17 @@ class VoiceprintRegistry:
             return
         self.db.record_device_outcome(device_id, float(score), bool(accepted), alpha=alpha)
 
-    def fetch_device_calibration(self, device_id: str) -> Dict[str, Any] | None:
+    def fetch_device_calibration(self, device_id: str) -> dict[str, Any] | None:
         if not device_id:
             return None
         return self.db.fetch_device_calibration(device_id)
 
-    def backfill_global_speaker_embeddings(self, match_threshold: float | None = None) -> Dict[str, Any]:
+    def backfill_global_speaker_embeddings(self, match_threshold: float | None = None) -> dict[str, Any]:
         if not self.graph:
             return {"ok": False, "error": "Neo4j not configured"}
         return {"ok": True, **self.graph.backfill_global_speaker_embeddings(match_threshold=match_threshold)}
 
-    def reconcile_to_neo4j(self, source: str = "reconcile", force: bool = False) -> Dict[str, Any]:
+    def reconcile_to_neo4j(self, source: str = "reconcile", force: bool = False) -> dict[str, Any]:
         """Push locally-stored voiceprints (SQLite) into Neo4j so the graph stays
         eventually consistent when enrollments happened while Neo4j was unavailable.
 
@@ -344,7 +345,7 @@ class VoiceprintRegistry:
         """
         if not self.graph:
             return {"ok": False, "error": "Neo4j not configured"}
-        summary: Dict[str, Any] = {"synced": 0, "skipped": 0, "errors": 0, "users": []}
+        summary: dict[str, Any] = {"synced": 0, "skipped": 0, "errors": 0, "users": []}
         for uid in self.list_users():
             try:
                 records = self.get_all_for_user(uid)

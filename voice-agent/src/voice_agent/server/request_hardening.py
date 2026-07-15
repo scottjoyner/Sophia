@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
 
 from fastapi import FastAPI, Request, Response
-
 
 DEFAULT_SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 import numpy as np
 
@@ -18,21 +17,21 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 
-def _score_record(embedding: np.ndarray, record: Dict[str, object]) -> float | None:
+def _score_record(embedding: np.ndarray, record: dict[str, object]) -> float | None:
     stored = np.array(record.get("embedding") or [], dtype=float).ravel()
     if stored.size == 0 or stored.shape != embedding.shape:
         return None
     return cosine_similarity(embedding, stored)
 
 
-def _candidate_threshold(record: Dict[str, object], default_threshold: float) -> float:
+def _candidate_threshold(record: dict[str, object], default_threshold: float) -> float:
     threshold = record.get("threshold")
     if isinstance(threshold, (int, float)):
         return float(threshold)
     return float(default_threshold)
 
 
-def _compute_adaptive_threshold(base: float, calibration: Dict[str, object] | None, config: "AppConfig") -> float:
+def _compute_adaptive_threshold(base: float, calibration: dict[str, object] | None, config: AppConfig) -> float:
     if not config.auth.adaptive_threshold_enabled:
         return float(base)
     if not calibration:
@@ -48,10 +47,10 @@ def _compute_adaptive_threshold(base: float, calibration: Dict[str, object] | No
 
 
 def _effective_threshold(
-    record: Dict[str, object],
+    record: dict[str, object],
     default_threshold: float,
-    config: "AppConfig",
-    registry: "VoiceprintRegistry | None",
+    config: AppConfig,
+    registry: VoiceprintRegistry | None,
 ) -> float:
     base = _candidate_threshold(record, default_threshold)
     device_id = record.get("device_id")
@@ -63,7 +62,7 @@ def _effective_threshold(
     return _compute_adaptive_threshold(base, calibration, config)
 
 
-def _build_candidate(record: Dict[str, object], score: float, threshold: float) -> Dict[str, object]:
+def _build_candidate(record: dict[str, object], score: float, threshold: float) -> dict[str, object]:
     return {
         "candidate_id": record.get("candidate_id") or record.get("version_id"),
         "candidate_type": record.get("candidate_type") or "version",
@@ -86,7 +85,7 @@ def _build_candidate(record: Dict[str, object], score: float, threshold: float) 
 
 def verify_audio_segment(
     config: AppConfig, session_id: str, user_id: str, samples: np.ndarray, sample_rate: int
-) -> Dict[str, object]:
+) -> dict[str, object]:
     registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite", config)
     embedder = SpeakerEmbedder()
     challenge_phrase = None
@@ -95,7 +94,7 @@ def verify_audio_segment(
 
     embedding = np.array(embedder.embed(samples, sample_rate), dtype=float)
     active_records = registry.get_all_for_user(user_id)
-    active_candidates: List[Tuple[float, Dict[str, object]]] = []
+    active_candidates: list[tuple[float, dict[str, object]]] = []
     for record in active_records:
         score = _score_record(embedding, record)
         if score is None:
@@ -108,8 +107,8 @@ def verify_audio_segment(
     active_threshold = _effective_threshold(best_active_record or {}, config.auth.threshold, config, registry)
     active_accepted = best_active_record is not None and best_active_score >= active_threshold
 
-    historical_candidates: List[Dict[str, object]] = []
-    best_fallback_candidate: Dict[str, object] | None = None
+    historical_candidates: list[dict[str, object]] = []
+    best_fallback_candidate: dict[str, object] | None = None
     fallback_score = 0.0
     fallback_used = False
     fallback_reason = None
@@ -118,7 +117,7 @@ def verify_audio_segment(
         fallback_reason = "active_head_below_threshold" if best_active_record else "no_active_match"
         candidate_records = registry.get_historical_candidates(user_id, embedding, top_k=5)
         seen: set[str] = set()
-        scored_candidates: List[Dict[str, object]] = []
+        scored_candidates: list[dict[str, object]] = []
         for record in candidate_records:
             candidate_id = str(record.get("candidate_id") or "")
             version_id = str(record.get("version_id") or "")

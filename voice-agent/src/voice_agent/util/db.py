@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable
+from typing import Any
 
 
 class Database:
@@ -69,7 +70,7 @@ class Database:
             )
             self.conn.commit()
 
-    def log_event(self, session_id: str, event_type: str, payload: Dict[str, Any]) -> None:
+    def log_event(self, session_id: str, event_type: str, payload: dict[str, Any]) -> None:
         with self._lock:
             cur = self.conn.cursor()
             cur.execute(
@@ -79,7 +80,7 @@ class Database:
             self.conn.commit()
 
     def save_voiceprint(
-        self, user_id: str, embedding_mean: Iterable[float], samples: Dict[str, Any], threshold: float
+        self, user_id: str, embedding_mean: Iterable[float], samples: dict[str, Any], threshold: float
     ) -> None:
         with self._lock:
             cur = self.conn.cursor()
@@ -96,7 +97,7 @@ class Database:
             )
             self.conn.commit()
 
-    def fetch_voiceprint(self, user_id: str) -> Dict[str, Any] | None:
+    def fetch_voiceprint(self, user_id: str) -> dict[str, Any] | None:
         with self._lock:
             cur = self.conn.cursor()
             cur.execute("SELECT embedding_mean, samples_json, threshold FROM voiceprints WHERE user_id=?", (user_id,))
@@ -109,7 +110,7 @@ class Database:
         return {"embedding": embedding, "samples": samples, "threshold": threshold}
 
     def save_device_voiceprint(
-        self, user_id: str, device_id: str, embedding_mean: Iterable[float], samples: Dict[str, Any], threshold: float
+        self, user_id: str, device_id: str, embedding_mean: Iterable[float], samples: dict[str, Any], threshold: float
     ) -> None:
         with self._lock:
             cur = self.conn.cursor()
@@ -126,7 +127,7 @@ class Database:
             )
             self.conn.commit()
 
-    def fetch_device_voiceprints(self, user_id: str) -> Dict[str, Dict[str, Any]]:
+    def fetch_device_voiceprints(self, user_id: str) -> dict[str, dict[str, Any]]:
         with self._lock:
             cur = self.conn.cursor()
             cur.execute(
@@ -182,7 +183,7 @@ class Database:
             )
             self.conn.commit()
 
-    def fetch_device_calibration(self, device_id: str) -> Dict[str, Any] | None:
+    def fetch_device_calibration(self, device_id: str) -> dict[str, Any] | None:
         with self._lock:
             cur = self.conn.cursor()
             cur.execute(

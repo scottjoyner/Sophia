@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import time
-from typing import List
 
 import numpy as np
 
@@ -12,9 +11,9 @@ from ..config import STTConfig
 class StreamingTranscriber:
     def __init__(self, config: STTConfig):
         self.config = config
-        self.buffer: List[np.ndarray] = []
+        self.buffer: list[np.ndarray] = []
         self.last_decode_ms = 0
-        self.partial_history: List[str] = []
+        self.partial_history: list[str] = []
         self._last_partial = ""
         self._try_load_model()
 

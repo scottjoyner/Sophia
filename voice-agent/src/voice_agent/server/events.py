@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Deque, Dict, Iterable, Optional
+from typing import Any
 
 from ..util.time import now_ms
 
@@ -12,18 +13,18 @@ from ..util.time import now_ms
 class EventRecord:
     id: int
     type: str
-    payload: Dict[str, Any]
+    payload: dict[str, Any]
 
 
 class EventBus:
     """Small in-process event fanout for websocket and dashboard clients."""
 
     def __init__(self, max_events: int = 1000):
-        self._events: Deque[EventRecord] = deque(maxlen=max_events)
+        self._events: deque[EventRecord] = deque(maxlen=max_events)
         self._subscribers: set[asyncio.Queue[EventRecord]] = set()
         self._next_id = 1
 
-    def publish(self, event_type: str, payload: Dict[str, Any]) -> EventRecord:
+    def publish(self, event_type: str, payload: dict[str, Any]) -> EventRecord:
         if "ts_ms" not in payload:
             payload = {**payload, "ts_ms": now_ms()}
         record = EventRecord(id=self._next_id, type=event_type, payload=payload)
@@ -36,7 +37,7 @@ class EventBus:
                 pass
         return record
 
-    def snapshot(self, *, after_id: int = 0, session_id: Optional[str] = None) -> list[EventRecord]:
+    def snapshot(self, *, after_id: int = 0, session_id: str | None = None) -> list[EventRecord]:
         records: Iterable[EventRecord] = self._events
         if after_id:
             records = (event for event in records if event.id > after_id)
@@ -53,5 +54,5 @@ class EventBus:
         self._subscribers.discard(queue)
 
 
-def event_to_dict(event: EventRecord) -> Dict[str, Any]:
+def event_to_dict(event: EventRecord) -> dict[str, Any]:
     return {"id": event.id, "type": event.type, "payload": event.payload}

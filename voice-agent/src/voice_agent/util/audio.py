@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import base64
-from pathlib import Path
-from typing import Tuple
-
 import importlib.util
+from pathlib import Path
+
 import numpy as np
 
 sf_spec = importlib.util.find_spec("soundfile")
@@ -24,7 +23,7 @@ def float_to_pcm16_bytes(samples: np.ndarray) -> bytes:
     return (samples * 32767.0).astype(np.int16).tobytes()
 
 
-def read_wav(path: str) -> Tuple[np.ndarray, int]:
+def read_wav(path: str) -> tuple[np.ndarray, int]:
     if sf is not None:
         data, sr = sf.read(path, dtype="float32")
         if data.ndim > 1:

@@ -5,7 +5,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -23,7 +23,7 @@ class TrustedSession:
     expires_at_ms: int
     last_seen_ms: int
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "session_key": self.session_key,
             "user_id": self.user_id,

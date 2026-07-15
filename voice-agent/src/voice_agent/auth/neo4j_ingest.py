@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 def collect_audio_paths_from_neo4j(
@@ -8,18 +8,18 @@ def collect_audio_paths_from_neo4j(
     user: str,
     password: str,
     *,
-    speaker_node_id: Optional[str] = None,
-    speaker_name: Optional[str] = None,
-    database: Optional[str] = None,
+    speaker_node_id: str | None = None,
+    speaker_name: str | None = None,
+    database: str | None = None,
     limit: int = 200,
-) -> List[str]:
+) -> list[str]:
     try:
         from neo4j import GraphDatabase
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise RuntimeError("neo4j driver not installed") from exc
 
     driver = GraphDatabase.driver(uri, auth=(user, password))
-    files: List[str] = []
+    files: list[str] = []
     with driver.session(database=database) as session:
         if speaker_node_id:
             query = (
@@ -56,10 +56,10 @@ def save_capture_to_neo4j(
     transcript: str,
     audio_path: str,
     content_type: str,
-    database: Optional[str] = None,
-    duration_ms: Optional[int] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    context: Optional[Dict[str, Any]] = None,
+    database: str | None = None,
+    duration_ms: int | None = None,
+    metadata: dict[str, Any] | None = None,
+    context: dict[str, Any] | None = None,
 ) -> None:
     try:
         from neo4j import GraphDatabase
@@ -178,8 +178,8 @@ def lookup_capture_by_client_capture_id(
     password: str,
     *,
     client_capture_id: str,
-    database: Optional[str] = None,
-) -> Dict[str, Any]:
+    database: str | None = None,
+) -> dict[str, Any]:
     """Look up a SophiaCapture in Neo4j by browser client_capture_id.
 
     Used by offline browser queue reconciliation after a graph outbox replay may
@@ -293,7 +293,7 @@ def save_meeting_to_neo4j(
             transcript=transcript,
             summary=summary or "",
         )
-        meeting_node = result.single()
+        result.single()
 
         for seg_id in segment_nodes:
             session.run(
@@ -315,10 +315,10 @@ def list_recent_captures(
     user: str,
     password: str,
     *,
-    database: Optional[str] = None,
+    database: str | None = None,
     limit: int = 50,
-    user_id: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    user_id: str | None = None,
+) -> list[dict[str, Any]]:
     """Return recent SophiaCapture nodes for the mobile Thoughts feed."""
     try:
         from neo4j import GraphDatabase

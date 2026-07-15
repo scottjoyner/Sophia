@@ -25,8 +25,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from voice_agent.config import load_config  # noqa: E402
 from voice_agent.auth.registry import VoiceprintRegistry  # noqa: E402
+from voice_agent.config import load_config  # noqa: E402
 
 _STOP = False
 

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
 
 import numpy as np
 
@@ -22,27 +22,27 @@ class SessionState:
     channels: int
     encoding: str
     user_id: str = "default"
-    buffer: List[np.ndarray] = field(default_factory=list)
-    segments: List[np.ndarray] = field(default_factory=list)
-    segment_start_ms: Optional[int] = None
+    buffer: list[np.ndarray] = field(default_factory=list)
+    segments: list[np.ndarray] = field(default_factory=list)
+    segment_start_ms: int | None = None
     last_partial_text: str = ""
 
 
-EventCallback = Callable[[str, Dict[str, object]], None]
+EventCallback = Callable[[str, dict[str, object]], None]
 
 
 class SessionManager:
-    def __init__(self, config: AppConfig, base_dir: Path, event_callback: Optional[EventCallback] = None):
+    def __init__(self, config: AppConfig, base_dir: Path, event_callback: EventCallback | None = None):
         self.config = config
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.sessions: Dict[str, SessionState] = {}
+        self.sessions: dict[str, SessionState] = {}
         self.logger = JsonlLogger(self.base_dir / "events.jsonl")
         self.db = Database(self.base_dir / "results.sqlite")
         self._event_callback = event_callback
         self.pipeline = PipelineManager(config, self.base_dir, event_callback=event_callback)
 
-    def _emit(self, event_type: str, payload: Dict[str, object]) -> None:
+    def _emit(self, event_type: str, payload: dict[str, object]) -> None:
         if self._event_callback:
             self._event_callback(event_type, payload)
 

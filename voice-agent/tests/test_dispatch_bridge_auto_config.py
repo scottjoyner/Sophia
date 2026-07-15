@@ -81,8 +81,8 @@ def test_dispatch_status_uses_env_base(monkeypatch, tmp_path):
 
     def fake_post(url, content=None, headers=None, timeout=None):
         assert url == "http://assistant.local:8000/api/voice/events"
-        assert content == b"{}"
         assert headers and headers["Content-Type"] == "application/json"
+        assert json.loads(content)["event_type"] == "task_created"
         return _Response(401, {"detail": "Missing voice signature header"}, text='{"detail":"Missing voice signature header"}')
 
     monkeypatch.setattr(httpx, "post", fake_post)

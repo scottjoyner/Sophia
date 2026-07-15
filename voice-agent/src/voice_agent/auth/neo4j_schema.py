@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 SOPHIA_SCHEMA_QUERIES = [
     "CREATE CONSTRAINT sophia_capture_dedupe_key IF NOT EXISTS FOR (c:SophiaCapture) REQUIRE c.dedupe_key IS UNIQUE",
@@ -20,8 +19,8 @@ def ensure_sophia_neo4j_schema(
     user: str,
     password: str,
     *,
-    database: Optional[str] = None,
-) -> Dict[str, Any]:
+    database: str | None = None,
+) -> dict[str, Any]:
     """Install Sophia memory graph constraints/indexes.
 
     These constraints are important for offline capture retry safety.  The app
@@ -35,7 +34,7 @@ def ensure_sophia_neo4j_schema(
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise RuntimeError("neo4j driver not installed") from exc
 
-    applied: List[str] = []
+    applied: list[str] = []
     driver = GraphDatabase.driver(uri, auth=(user, password))
     try:
         with driver.session(database=database) as session:

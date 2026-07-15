@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Optional
 
 import websockets
 
+from ..server.protocols import encode_message
 from ..util.audio import b64encode, float_to_pcm16_bytes, read_wav
 from ..util.time import now_ms
-from ..server.protocols import encode_message
 
 
 async def replay_wav(

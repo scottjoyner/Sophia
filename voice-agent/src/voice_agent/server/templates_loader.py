@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 

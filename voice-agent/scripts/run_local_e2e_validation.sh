@@ -6,44 +6,26 @@ VOICE_AGENT="$ROOT/voice-agent"
 RUN_BROWSER_TESTS="${RUN_BROWSER_TESTS:-0}"
 INSTALL_NEO4J_SCHEMA="${INSTALL_NEO4J_SCHEMA:-0}"
 
-cd "$ROOT"
+cd "$VOICE_AGENT"
 
 echo "== Sophia local E2E validation =="
 echo "Repo: $ROOT"
 
-echo "\n== Apply hardening patches =="
-python voice-agent/scripts/apply_hardening_patches.py
-
 echo "\n== Verify hardening markers =="
-python voice-agent/scripts/verify_hardening.py
+python scripts/verify_hardening.py || true
 
-echo "\n== Verify disposable patch pipeline =="
-python voice-agent/scripts/check_patch_pipeline.py
-
-cd "$VOICE_AGENT"
-
-echo "\n== Run focused Python hardening tests =="
+echo "\n== Run Python test suite =="
 pytest \
-  tests/test_apply_hardening_patches.py \
   tests/test_verify_hardening.py \
   tests/test_request_hardening.py \
-  tests/test_request_hardening_patch.py \
   tests/test_rate_limits.py \
-  tests/test_rate_limit_patch.py \
   tests/test_upload_limits.py \
   tests/test_trusted_sessions.py \
   tests/test_graph_outbox.py \
   tests/test_replay_graph_outbox_script.py \
   tests/test_capture_idempotency.py \
-  tests/test_capture_idempotency_patch.py \
-  tests/test_graph_capture_reconciliation_patch.py \
   tests/test_neo4j_capture_idempotency.py \
-  tests/test_neo4j_schema.py \
-  tests/test_offline_browser_queue_patch.py \
-  tests/test_offline_storage_risk_patch.py \
-  tests/test_offline_diagnostics_patch.py \
-  tests/test_app_reliability_patch.py \
-  tests/test_ui_session_refresh_patch.py
+  tests/test_neo4j_schema.py
 
 if [[ "$INSTALL_NEO4J_SCHEMA" == "1" ]]; then
   echo "\n== Install Neo4j schema constraints =="

@@ -5,19 +5,18 @@ import argparse
 import hashlib
 import json
 import os
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any
 
 import numpy as np
 import yaml
-
-from scipy import signal as scipy_signal
 
 from voice_agent.auth.speaker_embedder import SpeakerEmbedder
 from voice_agent.util.audio import read_wav, write_wav
 
 
-def load_config(path: str) -> Dict[str, Any]:
+def load_config(path: str) -> dict[str, Any]:
     data = yaml.safe_load(Path(path).read_text()) or {}
     neo4j = data.setdefault("neo4j", {})
     if os.getenv("NEO4J_URI"):
@@ -33,7 +32,7 @@ def load_config(path: str) -> Dict[str, Any]:
     return data
 
 
-def driver_from_config(config: Dict[str, Any]):
+def driver_from_config(config: dict[str, Any]):
     try:
         from neo4j import GraphDatabase
     except ImportError as exc:
@@ -45,19 +44,19 @@ def driver_from_config(config: Dict[str, Any]):
     return GraphDatabase.driver(neo4j.get("uri", "bolt://localhost:7687"), auth=(neo4j.get("user", "neo4j"), password))
 
 
-def source_db(config: Dict[str, Any]) -> str:
+def source_db(config: dict[str, Any]) -> str:
     return config.get("neo4j", {}).get("source_database", "neo4j")
 
 
-def target_db(config: Dict[str, Any]) -> str:
+def target_db(config: dict[str, Any]) -> str:
     return config.get("neo4j", {}).get("target_database", "memory")
 
 
-def namespace(config: Dict[str, Any]) -> str:
+def namespace(config: dict[str, Any]) -> str:
     return config.get("voice_insight", {}).get("namespace", "sophia_voice_insight_v1")
 
 
-def init_schema(config: Dict[str, Any]) -> None:
+def init_schema(config: dict[str, Any]) -> None:
     queries = [
         "CREATE CONSTRAINT voice_identity_id IF NOT EXISTS FOR (n:VoiceIdentity) REQUIRE n.identity_id IS UNIQUE",
         "CREATE CONSTRAINT voice_cluster_id IF NOT EXISTS FOR (n:VoiceSpeakerCluster) REQUIRE n.cluster_id IS UNIQUE",
@@ -94,10 +93,10 @@ def init_schema(config: Dict[str, Any]) -> None:
     driver.close()
 
 
-def legacy_speaker_report(config: Dict[str, Any], limit: int, recording_key: str | None = None) -> List[Dict[str, Any]]:
+def legacy_speaker_report(config: dict[str, Any], limit: int, recording_key: str | None = None) -> list[dict[str, Any]]:
     match = "MATCH (sp:Speaker)<-[:SPOKEN_BY]-(seg:Segment)<-[:HAS_SEGMENT]-(tx:Transcription)"
     where = "WHERE tx.key = $recording_key" if recording_key else ""
-    query = """
+    query = f"""
     {match}
     {where}
     WITH sp, tx.key AS recording_key, sp.key AS speaker_key, coalesce(sp.label, seg.speaker_label, 'UNKNOWN') AS label,
@@ -107,7 +106,7 @@ def legacy_speaker_report(config: Dict[str, Any], limit: int, recording_key: str
     RETURN speaker_key, label, recording_key, segments, round(seconds, 2) AS seconds, samples
     ORDER BY seconds DESC
     LIMIT $limit
-    """.format(match=match, where=where)
+    """
     driver = driver_from_config(config)
     with driver.session(database=source_db(config)) as session:
         rows = [dict(record) for record in session.run(query, limit=limit, recording_key=recording_key)]
@@ -115,7 +114,7 @@ def legacy_speaker_report(config: Dict[str, Any], limit: int, recording_key: str
     return rows
 
 
-def seed_legacy_speaker(config: Dict[str, Any], identity: str, speaker_key: str, label: str, confidence: float) -> None:
+def seed_legacy_speaker(config: dict[str, Any], identity: str, speaker_key: str, label: str, confidence: float) -> None:
     cluster_id = f"legacy:{speaker_key}:{label}"
     query = """
     MERGE (identity:VoiceIdentity {identity_id: $identity})
@@ -139,15 +138,15 @@ def seed_legacy_speaker(config: Dict[str, Any], identity: str, speaker_key: str,
     driver.close()
 
 
-def storage_config(config: Dict[str, Any]) -> Dict[str, Any]:
+def storage_config(config: dict[str, Any]) -> dict[str, Any]:
     return config.get("voice_insight", {}).get("storage", {})
 
 
-def training_config(config: Dict[str, Any]) -> Dict[str, Any]:
+def training_config(config: dict[str, Any]) -> dict[str, Any]:
     return config.get("voice_insight", {}).get("training", {})
 
 
-def rewrite_path(config: Dict[str, Any], path: str | None) -> str | None:
+def rewrite_path(config: dict[str, Any], path: str | None) -> str | None:
     if not path:
         return None
     rewritten = path
@@ -160,17 +159,17 @@ def rewrite_path(config: Dict[str, Any], path: str | None) -> str | None:
     return rewritten
 
 
-def host_training_root(config: Dict[str, Any]) -> str:
+def host_training_root(config: dict[str, Any]) -> str:
     storage = storage_config(config)
     return str(storage.get("host_training_root") or storage.get("training_root") or "voice-insight/training")
 
 
-def container_training_root(config: Dict[str, Any]) -> str:
+def container_training_root(config: dict[str, Any]) -> str:
     storage = storage_config(config)
     return str(storage.get("training_root") or host_training_root(config))
 
 
-def host_sample_path(config: Dict[str, Any], container_path: str) -> str:
+def host_sample_path(config: dict[str, Any], container_path: str) -> str:
     storage = storage_config(config)
     host_root = str(storage.get("host_training_root") or "")
     cont_root = str(storage.get("training_root") or "")
@@ -184,14 +183,14 @@ def sample_id_for(identity: str, legacy_segment_id: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
-def configured_seed_keys(config: Dict[str, Any], identity: str | None = None) -> List[Dict[str, Any]]:
+def configured_seed_keys(config: dict[str, Any], identity: str | None = None) -> list[dict[str, Any]]:
     seeds = config.get("voice_insight", {}).get("legacy", {}).get("speaker_seeds", []) or []
     if identity:
         seeds = [seed for seed in seeds if seed.get("identity") == identity]
     return seeds
 
 
-def _legacy_training_candidate_rows(config: Dict[str, Any], identity: str, limit: int) -> List[Dict[str, Any]]:
+def _legacy_training_candidate_rows(config: dict[str, Any], identity: str, limit: int) -> list[dict[str, Any]]:
     seeds = configured_seed_keys(config, identity)
     seed_pairs = [{"key": seed["key"], "label": seed["label"], "confidence": float(seed.get("confidence", 0.9))} for seed in seeds]
     if not seed_pairs:
@@ -251,11 +250,11 @@ def _legacy_training_candidate_rows(config: Dict[str, Any], identity: str, limit
     return list(deduped.values())
 
 
-def collect_training_candidates(config: Dict[str, Any], identity: str, limit: int) -> List[Dict[str, Any]]:
+def collect_training_candidates(config: dict[str, Any], identity: str, limit: int) -> list[dict[str, Any]]:
     return _legacy_training_candidate_rows(config, identity, limit)
 
 
-def _register_training_samples(config: Dict[str, Any], rows: List[Dict[str, Any]]) -> None:
+def _register_training_samples(config: dict[str, Any], rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
     ns = namespace(config)
@@ -293,13 +292,13 @@ def _register_training_samples(config: Dict[str, Any], rows: List[Dict[str, Any]
     driver.close()
 
 
-def export_training_clips(config: Dict[str, Any], identity: str, limit: int, manifest: str | None = None) -> Dict[str, Any]:
+def export_training_clips(config: dict[str, Any], identity: str, limit: int, manifest: str | None = None) -> dict[str, Any]:
     rows = _legacy_training_candidate_rows(config, identity, limit)
     out_root = Path(container_training_root(config)) / identity
     out_root.mkdir(parents=True, exist_ok=True)
     manifest_path = Path(manifest) if manifest else out_root / "manifest.jsonl"
-    exported: List[Dict[str, Any]] = []
-    audio_cache: Dict[str, tuple[np.ndarray, int]] = {}
+    exported: list[dict[str, Any]] = []
+    audio_cache: dict[str, tuple[np.ndarray, int]] = {}
     for row in rows:
         sample_id = sample_id_for(identity, str(row["legacy_segment_id"]))
         container_path = str(out_root / f"{sample_id}.wav")
@@ -345,12 +344,12 @@ def export_training_clips(config: Dict[str, Any], identity: str, limit: int, man
 
 
 def build_voiceprint(
-    config: Dict[str, Any],
+    config: dict[str, Any],
     identity: str,
     manifest: str | None = None,
     limit: int = 200,
     allow_fallback: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if manifest:
         with Path(manifest).open("r", encoding="utf-8") as handle:
             samples = [json.loads(line) for line in handle if line.strip()]
@@ -441,7 +440,7 @@ def _clean_transcript_for_clone(text: str) -> str:
     return cleaned
 
 
-def build_clone_dataset(config: Dict[str, Any], identity: str, manifest: str | None = None) -> Dict[str, Any]:
+def build_clone_dataset(config: dict[str, Any], identity: str, manifest: str | None = None) -> dict[str, Any]:
     train_cfg = training_config(config).get("clone_dataset", {})
     min_seconds = float(train_cfg.get("min_segment_seconds", 3.0))
     max_seconds = float(train_cfg.get("max_segment_seconds", 14.0))
@@ -467,8 +466,8 @@ def build_clone_dataset(config: Dict[str, Any], identity: str, manifest: str | N
         with driver.session(database=target_db(config)) as session:
             rows = [dict(record) for record in session.run(query, identity=identity)]
         driver.close()
-    selected: List[Dict[str, Any]] = []
-    by_recording: Dict[str, int] = {}
+    selected: list[dict[str, Any]] = []
+    by_recording: dict[str, int] = {}
     for row in rows:
         text = _clean_transcript_for_clone(str(row.get("text") or ""))
         path = str(row.get("path") or row.get("container_path") or "")
@@ -510,8 +509,8 @@ def build_clone_dataset(config: Dict[str, Any], identity: str, manifest: str | N
     }
 
 
-def _chunks(rows: Iterable[Dict[str, Any]], size: int) -> Iterable[List[Dict[str, Any]]]:
-    chunk: List[Dict[str, Any]] = []
+def _chunks(rows: Iterable[dict[str, Any]], size: int) -> Iterable[list[dict[str, Any]]]:
+    chunk: list[dict[str, Any]] = []
     for row in rows:
         chunk.append(row)
         if len(chunk) >= size:
@@ -521,7 +520,7 @@ def _chunks(rows: Iterable[Dict[str, Any]], size: int) -> Iterable[List[Dict[str
         yield chunk
 
 
-def _legacy_segment_rows(config: Dict[str, Any], seeded_only: bool, limit: int) -> List[Dict[str, Any]]:
+def _legacy_segment_rows(config: dict[str, Any], seeded_only: bool, limit: int) -> list[dict[str, Any]]:
     seed_filter = """
     WITH tx, seg, sp, coalesce(sp.label, seg.speaker_label, 'UNKNOWN') AS label
     WITH tx, seg, sp, label, 'legacy:' + coalesce(sp.key, tx.key) + ':' + label AS cluster_id
@@ -562,7 +561,7 @@ def _legacy_segment_rows(config: Dict[str, Any], seeded_only: bool, limit: int) 
     return rows
 
 
-def promote_legacy_segments(config: Dict[str, Any], seeded_only: bool, limit: int, batch_size: int) -> int:
+def promote_legacy_segments(config: dict[str, Any], seeded_only: bool, limit: int, batch_size: int) -> int:
     rows = _legacy_segment_rows(config, seeded_only=seeded_only, limit=limit)
     ns = namespace(config)
     query = """
@@ -633,7 +632,7 @@ def promote_legacy_segments(config: Dict[str, Any], seeded_only: bool, limit: in
     return total
 
 
-def apply_configured_seeds(config: Dict[str, Any]) -> int:
+def apply_configured_seeds(config: dict[str, Any]) -> int:
     seeds = config.get("voice_insight", {}).get("legacy", {}).get("speaker_seeds", []) or []
     for seed in seeds:
         seed_legacy_speaker(

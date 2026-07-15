@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal, Optional
-
+from typing import Literal
 
 VoiceIntentType = Literal["dictation", "command", "question", "chat"]
 
@@ -13,7 +12,7 @@ class VoiceIntent:
     name: VoiceIntentType
     confidence: float
     transcript: str
-    hermes_prompt: Optional[str] = None
+    hermes_prompt: str | None = None
     voice_intent: str = ""
     source: str = "heuristic"
 

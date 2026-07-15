@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from voice_agent.util.audio import b64encode, float_to_pcm16_bytes, read_wav
 from voice_agent.server.protocols import encode_message
+from voice_agent.util.audio import b64encode, float_to_pcm16_bytes, read_wav
 
 
 def resample_to_16k(samples: np.ndarray, sr: int) -> np.ndarray:
@@ -78,7 +78,7 @@ async def _drain_one(ws, timeout=1.0):
         data = await asyncio.wait_for(ws.recv(), timeout=timeout)
         ev = json.loads(data)
         _show_event(ev)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass
 
 
@@ -92,7 +92,7 @@ async def _drain_all(ws, timeout=5.0):
             data = await asyncio.wait_for(ws.recv(), timeout=min(remaining, 0.5))
             ev = json.loads(data)
             _show_event(ev)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             break
 
 
@@ -121,7 +121,7 @@ def _show_event(ev: dict):
         text = epayload.get("text", "")
         print(f"  >>> STT: {text[:80]}")
     elif etype == "session_end":
-        print(f"  >>> SESSION END")
+        print("  >>> SESSION END")
     elif etype == "stt_refine":
         text = epayload.get("text", "")
         print(f"  >>> STT_REFINE: {text[:80]}")
@@ -138,7 +138,7 @@ if __name__ == "__main__":
         td = Path("/ssd-ingest/voice-insight/training/scott")
         import json as _json
         mf = td / "manifest.jsonl"
-        lines = [l for l in mf.read_text().splitlines() if l]
+        lines = [ln for ln in mf.read_text().splitlines() if ln]
         entry = _json.loads(lines[len(lines) // 2])
         wav = entry["container_path"]
         print(f"No WAV arg; using midpoint training clip: {wav}")

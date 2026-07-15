@@ -2,7 +2,11 @@ import pytest
 from fastapi import HTTPException, UploadFile
 from starlette.datastructures import Headers
 
-from voice_agent.server.upload_limits import UploadPolicy, read_upload_with_limits, safe_upload_suffix
+from voice_agent.server.upload_limits import (
+    UploadPolicy,
+    read_upload_with_limits,
+    safe_upload_suffix,
+)
 
 
 class MemoryUpload(UploadFile):

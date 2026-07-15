@@ -7,10 +7,9 @@ import os
 import time
 import uuid
 from collections import OrderedDict
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
-
 
 ASSISTX_VOICE_WEBHOOK_BASE_URL = os.getenv("ASSISTX_VOICE_WEBHOOK_BASE_URL", "http://host.docker.internal:8000").rstrip("/")
 ASSISTX_VOICE_WEBHOOK_BASE_URL_CONFIGURED = "ASSISTX_VOICE_WEBHOOK_BASE_URL" in os.environ
@@ -22,7 +21,7 @@ ASSISTX_VOICE_WEBHOOK_SECRET_CONFIGURED = bool(
 )
 
 
-def assistx_base_url(raw: Optional[str] = None) -> str:
+def assistx_base_url(raw: str | None = None) -> str:
     candidate = (
         ASSISTX_VOICE_WEBHOOK_BASE_URL
         if ASSISTX_VOICE_WEBHOOK_BASE_URL_CONFIGURED
@@ -33,11 +32,11 @@ def assistx_base_url(raw: Optional[str] = None) -> str:
     return candidate or "http://host.docker.internal:8000"
 
 
-def assistx_webhook_url(raw: Optional[str] = None) -> str:
+def assistx_webhook_url(raw: str | None = None) -> str:
     return f"{assistx_base_url(raw)}/api/voice/events"
 
 
-def assistx_basic_auth() -> Optional[tuple[str, str]]:
+def assistx_basic_auth() -> tuple[str, str] | None:
     user = os.getenv("ASSISTX_BASIC_AUTH_USER", "")
     password = os.getenv("ASSISTX_BASIC_AUTH_PASS", "")
     if user and password:
@@ -48,19 +47,19 @@ def assistx_basic_auth() -> Optional[tuple[str, str]]:
 def build_voice_event(
     event_type: str,
     text: str = "",
-    metadata: Optional[Dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
     *,
-    session_id: Optional[str] = None,
+    session_id: str | None = None,
     auto_dispatch: bool = True,
-    actor: Optional[Dict[str, Any]] = None,
-) -> "OrderedDict[str, Any]":
+    actor: dict[str, Any] | None = None,
+) -> OrderedDict[str, Any]:
     event_id = uuid.uuid4().hex
     correlation_id = uuid.uuid4().hex
     dispatch_id = uuid.uuid4().hex
     now = str(time.time())
     meta = {k: v for k, v in (metadata or {}).items() if v is not None} or None
     actor = actor or {}
-    payload: "OrderedDict[str, Any]" = OrderedDict()
+    payload: OrderedDict[str, Any] = OrderedDict()
     payload["event_id"] = event_id
     payload["event_type"] = event_type
     if text:
@@ -89,7 +88,7 @@ def build_voice_event(
     return payload
 
 
-def sign_headers(token: str, body_bytes: bytes) -> Dict[str, str]:
+def sign_headers(token: str, body_bytes: bytes) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
     user, password = (os.getenv("ASSISTX_BASIC_AUTH_USER", ""), os.getenv("ASSISTX_BASIC_AUTH_PASS", ""))
     if user and password:
@@ -104,20 +103,19 @@ def sign_headers(token: str, body_bytes: bytes) -> Dict[str, str]:
 
 
 def dispatch_to_assistx(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     *,
-    target_url: Optional[str] = None,
-    token: Optional[str] = None,
+    target_url: str | None = None,
+    token: str | None = None,
     timeout: float = 10.0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     webhook_url = assistx_webhook_url(target_url)
     secret = ASSISTX_VOICE_WEBHOOK_SECRET or (token or "").strip()
     event_id = payload.get("event_id")
     correlation_id = payload.get("correlation_id")
-    event_type = payload.get("event_type")
     body_bytes = json_dumps(payload)
     headers = sign_headers(secret, body_bytes) if secret else {"Content-Type": "application/json"}
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "event_id": event_id,
         "sent": False,
         "error": None,
@@ -147,5 +145,5 @@ def dispatch_to_assistx(
     return result
 
 
-def json_dumps(payload: Dict[str, Any]) -> bytes:
+def json_dumps(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")

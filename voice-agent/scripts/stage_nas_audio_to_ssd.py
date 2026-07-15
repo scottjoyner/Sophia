@@ -8,9 +8,8 @@ import os
 import shutil
 import sys
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
-
 
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".webm"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi"}

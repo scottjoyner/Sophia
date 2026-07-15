@@ -7,7 +7,6 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from typing import List
 
 import numpy as np
 import uvicorn
@@ -43,8 +42,8 @@ def _require_owner_override(config: AppConfig, user_id: str, token: str | None) 
         raise EnrollmentError("Invalid owner override token")
 
 
-def _files_from_args(args: argparse.Namespace) -> List[str]:
-    files: List[str] = []
+def _files_from_args(args: argparse.Namespace) -> list[str]:
+    files: list[str] = []
     if getattr(args, "audio_dir", None):
         root = Path(args.audio_dir)
         patterns = getattr(args, "glob", None) or ["*.wav"]
@@ -64,7 +63,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 def cmd_enroll(args: argparse.Namespace) -> None:
     config = _load_config(args.config)
-    files: List[str] = []
+    files: list[str] = []
     if args.mic:
         files = _record_phrases(config, args.user, args.phrases, args.n)
     else:
@@ -131,6 +130,7 @@ def cmd_mic(args: argparse.Namespace) -> None:
         sys.exit(1)
     import sounddevice as sd
     import websockets
+
     from .util.audio import b64encode, float_to_pcm16_bytes
     from .util.time import now_ms
 
@@ -332,9 +332,9 @@ def _record_audio(seconds: int) -> tuple[np.ndarray, int]:
     return audio.flatten(), sample_rate
 
 
-def _record_phrases(config: AppConfig, user_id: str, phrases_path: str, n: int) -> List[str]:
+def _record_phrases(config: AppConfig, user_id: str, phrases_path: str, n: int) -> list[str]:
     phrases = Path(phrases_path).read_text(encoding="utf-8").splitlines()
-    paths: List[str] = []
+    paths: list[str] = []
     for idx in range(n):
         phrase = phrases[idx % len(phrases)] if phrases else "Please say the enrollment phrase."
         print(f"Say: {phrase}")

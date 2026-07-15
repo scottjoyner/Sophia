@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-import uuid
 import threading
+import uuid
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, ClassVar
 
 from ..config import Neo4jConfig
 
@@ -16,8 +17,8 @@ class VoiceprintGraphRecord:
     scope: str
     device_id: str | None
     version_id: str
-    embedding: List[float]
-    samples: Dict[str, Any]
+    embedding: list[float]
+    samples: dict[str, Any]
     threshold: float
     sample_count: int
     source: str
@@ -46,7 +47,7 @@ def _neo4j_json(value: object) -> object:
     return value
 
 
-def link_global_speaker_by_label(session, user_id: str, embedding: Sequence[float]) -> Dict[str, Any] | None:
+def link_global_speaker_by_label(session, user_id: str, embedding: Sequence[float]) -> dict[str, Any] | None:
     """Bridge a VoiceIdentity to a global ``GlobalSpeaker`` node whose display label
     matches the owner's user_id (case-insensitive). This links the trained owner
     voiceprint embedding onto the canonical global speaker so diarization/linkage
@@ -201,7 +202,7 @@ class VoiceprintGraphStore:
                     driver.close()
 
     @staticmethod
-    def _parse_samples_json(samples_json: str | None) -> Dict[str, Any]:
+    def _parse_samples_json(samples_json: str | None) -> dict[str, Any]:
         if not samples_json:
             return {}
         try:
@@ -211,7 +212,7 @@ class VoiceprintGraphStore:
             return {}
 
     @staticmethod
-    def _record_from_row(row: Dict[str, Any]) -> VoiceprintGraphRecord:
+    def _record_from_row(row: dict[str, Any]) -> VoiceprintGraphRecord:
         samples = VoiceprintGraphStore._parse_samples_json(row.get("samples_json"))
         return VoiceprintGraphRecord(
             user_id=row["user_id"],
@@ -238,7 +239,7 @@ class VoiceprintGraphStore:
         finally:
             driver.close()
 
-    def _query_all(self, query: str, **params: Any) -> List[Dict[str, Any]]:
+    def _query_all(self, query: str, **params: Any) -> list[dict[str, Any]]:
         driver = self._driver()
         try:
             with driver.session(database=self.database) as session:
@@ -247,7 +248,7 @@ class VoiceprintGraphStore:
             driver.close()
 
     @staticmethod
-    def _candidate_id_from_row(row: Dict[str, Any]) -> str:
+    def _candidate_id_from_row(row: dict[str, Any]) -> str:
         candidate_type = row.get("candidate_type") or "version"
         if candidate_type == "sample":
             sample_id = row.get("sample_id") or row.get("sample_sha256") or row.get("version_id")
@@ -260,7 +261,7 @@ class VoiceprintGraphStore:
         user_id: str,
         embedding: Sequence[float],
         top_k: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         version_query = """
         CALL db.index.vector.queryNodes('voiceprint_version_embedding_idx', $limit, $embedding) YIELD node, score
         WITH node, score
@@ -316,7 +317,7 @@ class VoiceprintGraphStore:
         ORDER BY score DESC
         LIMIT $limit
         """
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         driver = self._driver()
         try:
             with driver.session(database=self.database) as session:
@@ -324,7 +325,7 @@ class VoiceprintGraphStore:
                 sample_rows = [dict(row) for row in session.run(sample_query, user_id=user_id, embedding=list(embedding), limit=top_k)]
         finally:
             driver.close()
-        combined: Dict[str, Dict[str, Any]] = {}
+        combined: dict[str, dict[str, Any]] = {}
         for row in version_rows + sample_rows:
             candidate_id = self._candidate_id_from_row(row)
             row["candidate_id"] = candidate_id
@@ -338,14 +339,14 @@ class VoiceprintGraphStore:
         *,
         user_id: str,
         embedding_mean: Iterable[float],
-        samples: Dict[str, Any],
+        samples: dict[str, Any],
         threshold: float,
         source: str,
         append: bool,
         device_id: str | None = None,
         capture_id: str | None = None,
         session_id: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         group_key = self._group_key(user_id, device_id)
         scope = self._scope(device_id)
         version_id = uuid.uuid4().hex
@@ -545,7 +546,7 @@ class VoiceprintGraphStore:
         embedding: Sequence[float],
         *,
         match_threshold: float = 0.85,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Resolve the owner's trained embedding into the global Speaker pool.
 
         If a global Speaker already carries an embedding that is a strong match
@@ -654,7 +655,7 @@ class VoiceprintGraphStore:
         finally:
             driver.close()
 
-    def get_identity_linkage(self, user_id: str) -> List[Dict[str, Any]]:
+    def get_identity_linkage(self, user_id: str) -> list[dict[str, Any]]:
         query = """
         MATCH (identity:VoiceIdentity {user_id: $user_id})-[r:IS_SPEAKER]->(speaker:Speaker)
         RETURN speaker.user_id AS speaker_user_id,
@@ -670,7 +671,7 @@ class VoiceprintGraphStore:
             for row in self._query_all(query, user_id=user_id)
         ]
 
-    def backfill_global_speaker_embeddings(self, match_threshold: float | None = None) -> Dict[str, Any]:
+    def backfill_global_speaker_embeddings(self, match_threshold: float | None = None) -> dict[str, Any]:
         """Re-run global-speaker linking for every enrolled identity.
 
         Use this to (re)populate the ``speaker_embedding_idx`` and bridge owner
@@ -682,7 +683,7 @@ class VoiceprintGraphStore:
         """
         if match_threshold is None:
             match_threshold = 0.85
-        summary: Dict[str, Any] = {"users": [], "linked": 0, "skipped": 0, "errors": 0}
+        summary: dict[str, Any] = {"users": [], "linked": 0, "skipped": 0, "errors": 0}
         for user_id in self.list_user_ids():
             try:
                 record = self.get_active_record(user_id)
@@ -702,7 +703,7 @@ class VoiceprintGraphStore:
                 summary["users"].append({"user_id": user_id, "status": "error", "error": f"{type(exc).__name__}: {exc}"})
         return summary
 
-    def get_active_records(self, user_id: str) -> List[Dict[str, Any]]:
+    def get_active_records(self, user_id: str) -> list[dict[str, Any]]:
         query = """
         MATCH (identity:VoiceIdentity {user_id: $user_id})-[:HAS_GROUP]->(group:VoiceprintGroup)
         WHERE coalesce(group.deleted, false) = false
@@ -730,7 +731,7 @@ class VoiceprintGraphStore:
             record["created_at"] = _neo4j_json(record.get("created_at"))
         return records
 
-    def get_historical_candidates(self, user_id: str) -> List[Dict[str, Any]]:
+    def get_historical_candidates(self, user_id: str) -> list[dict[str, Any]]:
         query = """
         MATCH (identity:VoiceIdentity {user_id: $user_id})-[:HAS_GROUP]->(group:VoiceprintGroup)
         WHERE coalesce(group.deleted, false) = false
@@ -752,7 +753,7 @@ class VoiceprintGraphStore:
         ORDER BY CASE WHEN coalesce(version.active, true) = true THEN 0 ELSE 1 END, version.created_at DESC
         """
         records = self._query_all(query, user_id=user_id)
-        candidates: List[Dict[str, Any]] = []
+        candidates: list[dict[str, Any]] = []
         for record in records:
             samples = self._parse_samples_json(record.get("samples_json"))
             base = dict(record)
@@ -793,7 +794,7 @@ class VoiceprintGraphStore:
                 )
         return candidates
 
-    def search_candidates(self, user_id: str, embedding: Sequence[float], top_k: int = 5) -> List[Dict[str, Any]]:
+    def search_candidates(self, user_id: str, embedding: Sequence[float], top_k: int = 5) -> list[dict[str, Any]]:
         try:
             results = self._search_vector_candidates(user_id=user_id, embedding=embedding, top_k=top_k)
             if results:
@@ -801,7 +802,7 @@ class VoiceprintGraphStore:
         except Exception:
             pass
         historical = self.get_historical_candidates(user_id)
-        scored: List[Dict[str, Any]] = []
+        scored: list[dict[str, Any]] = []
         embedding_array = list(embedding)
         if not embedding_array:
             return historical[:top_k]
@@ -825,20 +826,20 @@ class VoiceprintGraphStore:
         scored.sort(key=lambda row: float(row.get("score") or 0.0), reverse=True)
         return scored[:top_k]
 
-    def get_active_record(self, user_id: str) -> Dict[str, Any] | None:
+    def get_active_record(self, user_id: str) -> dict[str, Any] | None:
         records = self.get_active_records(user_id)
         for record in records:
             if record.get("scope") == "identity":
                 return record
         return records[0] if records else None
 
-    def get_device_record(self, user_id: str, device_id: str) -> Dict[str, Any] | None:
+    def get_device_record(self, user_id: str, device_id: str) -> dict[str, Any] | None:
         for record in self.get_active_records(user_id):
             if record.get("scope") == "device" and (record.get("device_id") or "") == device_id:
                 return record
         return None
 
-    def list_user_ids(self) -> List[str]:
+    def list_user_ids(self) -> list[str]:
         query = """
         MATCH (identity:VoiceIdentity)
         RETURN DISTINCT identity.user_id AS user_id

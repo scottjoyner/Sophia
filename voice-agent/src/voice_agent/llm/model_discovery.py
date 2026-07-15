@@ -5,7 +5,6 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 import requests
 
@@ -65,8 +64,8 @@ class ModelDiscoverer:
         self,
         *,
         node_port: int = 1234,
-        router_models_url: Optional[str] = None,
-        candidate_nodes: Optional[List[str]] = None,
+        router_models_url: str | None = None,
+        candidate_nodes: list[str] | None = None,
         refresh_interval: float = 30.0,
         chat_max_params: float = 4.0,
         task_min_params: float = 20.0,
@@ -80,10 +79,10 @@ class ModelDiscoverer:
         self.task_min_params = task_min_params
         self.probe_timeout = probe_timeout
         self._lock = threading.Lock()
-        self._endpoints: List[ModelEndpoint] = []
-        self._last_used: Dict[str, float] = {}  # full_id -> last selected ts
+        self._endpoints: list[ModelEndpoint] = []
+        self._last_used: dict[str, float] = {}  # full_id -> last selected ts
         self._last_refresh = 0.0
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._started = False
         self._router_warned = False
 
@@ -98,7 +97,7 @@ class ModelDiscoverer:
         return now - last  # seconds since last use; bigger = idler
 
     # -- discovery ---------------------------------------------------------
-    def _discover_nodes(self) -> List[str]:
+    def _discover_nodes(self) -> list[str]:
         nodes = set(self.candidate_nodes)
         nodes.update(self.DEFAULT_NODES)
         try:
@@ -117,13 +116,13 @@ class ModelDiscoverer:
                 logger.debug("fleet: auto-router model list unavailable: %s", exc)
         return sorted(nodes)
 
-    def _probe_node(self, node: str) -> List[ModelEndpoint]:
+    def _probe_node(self, node: str) -> list[ModelEndpoint]:
         url = f"http://{node}:{self.node_port}/v1/models"
         try:
             data = requests.get(url, timeout=self.probe_timeout).json()
         except Exception:
             return []
-        out: List[ModelEndpoint] = []
+        out: list[ModelEndpoint] = []
         for m in data.get("data", []):
             mid = m.get("id", "")
             if not mid or "embed" in mid.lower():
@@ -139,12 +138,12 @@ class ModelDiscoverer:
             )
         return out
 
-    def discover(self, force: bool = False) -> List[ModelEndpoint]:
+    def discover(self, force: bool = False) -> list[ModelEndpoint]:
         now = time.time()
         if not force and self._endpoints and now - self._last_refresh < self.refresh_interval:
             return self._endpoints
         nodes = self._discover_nodes()
-        found: List[ModelEndpoint] = []
+        found: list[ModelEndpoint] = []
         for node in nodes:
             found.extend(self._probe_node(node))
         with self._lock:
@@ -173,14 +172,14 @@ class ModelDiscoverer:
         self._thread.start()
 
     # -- access ------------------------------------------------------------
-    def endpoints(self) -> List[ModelEndpoint]:
+    def endpoints(self) -> list[ModelEndpoint]:
         with self._lock:
             return list(self._endpoints)
 
-    def _non_embedding(self) -> List[ModelEndpoint]:
+    def _non_embedding(self) -> list[ModelEndpoint]:
         return [e for e in self.endpoints() if not e.is_embedding]
 
-    def chat_endpoint(self) -> Optional[ModelEndpoint]:
+    def chat_endpoint(self) -> ModelEndpoint | None:
         """Fastest model for interactive chat, preferring idle (low-utilisation)
         machines so the fleet is used like worker bees.
 
@@ -197,7 +196,7 @@ class ModelDiscoverer:
         self._mark_used(chosen)
         return chosen
 
-    def task_endpoint(self) -> Optional[ModelEndpoint]:
+    def task_endpoint(self) -> ModelEndpoint | None:
         """Most capable model for heavy lifting (task extraction, reasoning),
         preferring idle nodes among the largest models."""
         eps = self._non_embedding()
@@ -210,7 +209,7 @@ class ModelDiscoverer:
         self._mark_used(chosen)
         return chosen
 
-    def snapshot(self) -> Dict[str, object]:
+    def snapshot(self) -> dict[str, object]:
         eps = self.endpoints()
         ce = self.chat_endpoint()
         te = self.task_endpoint()

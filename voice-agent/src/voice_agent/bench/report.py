@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import sqlite3
+from pathlib import Path
 
 
 def generate_report(db_path: str, output_path: str) -> None:
