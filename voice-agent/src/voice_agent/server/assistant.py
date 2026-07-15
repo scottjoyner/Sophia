@@ -40,6 +40,7 @@ class Assistant:
         self._endpoint_cooldown = 120.0
         self._last_chat_endpoint = None
         self._last_task_endpoint = None
+        self.db = None
         if getattr(config.llm, "fleet_discovery", False):
             self._init_fleet()
 
@@ -268,12 +269,14 @@ class Assistant:
         actor: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
+        user_id = (actor or {}).get("user_id", "scott")
+        device_id = (actor or {}).get("device_id")
         for task in tasks:
             text = task.get("title") or task.get("description") or "Untitled task"
             metadata = {
                 "task": task,
-                "user_id": (actor or {}).get("user_id", "scott"),
-                "device_id": (actor or {}).get("device_id"),
+                "user_id": user_id,
+                "device_id": device_id,
             }
             payload = build_voice_event(
                 "task_created",
@@ -283,13 +286,41 @@ class Assistant:
                 auto_dispatch=True,
                 actor=actor,
             )
+            outbox_id = None
+            if self.db is not None:
+                try:
+                    outbox_id = self.db.enqueue_task(
+                        user_id=user_id,
+                        device_id=device_id,
+                        session_id=session_id or "console",
+                        event_id=payload.get("event_id"),
+                        correlation_id=payload.get("correlation_id"),
+                        task_title=text,
+                        task_json=task,
+                        payload_json=payload,
+                    )
+                except Exception as exc:
+                    logger.warning("failed to enqueue task in outbox: %s", exc)
             dispatch = dispatch_to_assistx(payload)
+            if self.db is not None and outbox_id is not None:
+                try:
+                    self.db.mark_task_dispatched(
+                        outbox_id,
+                        sent=bool(dispatch.get("sent")),
+                        dispatch_id=dispatch.get("dispatch_id"),
+                        task_id=dispatch.get("task_id"),
+                        response=dispatch.get("response"),
+                        error=dispatch.get("error"),
+                    )
+                except Exception as exc:
+                    logger.warning("failed to record task dispatch: %s", exc)
             results.append(
                 {
                     "task": task,
                     "event_id": payload.get("event_id"),
                     "correlation_id": payload.get("correlation_id"),
                     "dispatch": dispatch,
+                    "outbox_id": outbox_id,
                 }
             )
         return results
@@ -340,3 +371,63 @@ def _parse_task_list(raw: str) -> list[dict[str, Any]]:
             }
         )
     return cleaned
+
+
+def reconcile_tasks(db, *, requeue_failed: bool = False, max_retries: int = 5) -> dict[str, Any]:
+    """Report on the ingested-task outbox and optionally requeue dead letters.
+
+    Mirrors the drift-report shape used by ``reconcile_to_neo4j`` so operators
+    get a consistent view of what was dispatched vs. what is stuck.
+    """
+    summary = db.task_summary()
+    pending = db.list_tasks(status="pending", limit=100)
+    failed = db.list_tasks(status="failed", limit=100)
+    retriable = [t for t in failed if (t.get("attempts") or 0) <= max_retries]
+    dead_letter = [t for t in failed if (t.get("attempts") or 0) > max_retries]
+    requeued = 0
+    if requeue_failed:
+        for t in retriable:
+            try:
+                db.requeue_failed_task(t["task_outbox_id"])
+                requeued += 1
+            except Exception as exc:
+                logger.warning("failed to requeue task %s: %s", t.get("task_outbox_id"), exc)
+    return {
+        "summary": summary,
+        "pending_count": len(pending),
+        "failed_count": len(failed),
+        "retriable_count": len(retriable),
+        "dead_letter_count": len(dead_letter),
+        "requeued": requeued,
+        "check_only": not requeue_failed,
+    }
+
+
+def retry_failed_tasks(db) -> dict[str, Any]:
+    """Re-dispatch every pending + retriable failed task through AssistX."""
+    pending = db.list_tasks(status="pending", limit=500)
+    failed = db.list_tasks(status="failed", limit=500)
+    retriable = [t for t in failed if (t.get("attempts") or 0) <= 5]
+    attempted = 0
+    succeeded = 0
+    for t in pending + retriable:
+        payload = t.get("payload_json") or {}
+        if not payload:
+            continue
+        attempted += 1
+        dispatch = dispatch_to_assistx(payload)
+        db.mark_task_dispatched(
+            t["task_outbox_id"],
+            sent=bool(dispatch.get("sent")),
+            dispatch_id=dispatch.get("dispatch_id"),
+            task_id=dispatch.get("task_id"),
+            response=dispatch.get("response"),
+            error=dispatch.get("error"),
+        )
+        if dispatch.get("sent"):
+            succeeded += 1
+    return {
+        "attempted": attempted,
+        "succeeded": succeeded,
+        "failed": attempted - succeeded,
+    }

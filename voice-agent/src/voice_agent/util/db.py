@@ -68,6 +68,29 @@ class Database:
                 )
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS task_outbox (
+                    task_outbox_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_ts_ms INTEGER,
+                    user_id TEXT,
+                    device_id TEXT,
+                    session_id TEXT,
+                    event_id TEXT,
+                    correlation_id TEXT,
+                    task_title TEXT,
+                    task_json TEXT,
+                    payload_json TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    last_response_json TEXT,
+                    dispatch_id TEXT,
+                    task_id TEXT,
+                    updated_at TEXT
+                )
+                """
+            )
             self.conn.commit()
 
     def log_event(self, session_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -200,3 +223,112 @@ class Database:
             "n_accepted": row[2] or 0,
             "n_rejected": row[3] or 0,
         }
+
+    def enqueue_task(
+        self,
+        *,
+        user_id: str,
+        device_id: str | None,
+        session_id: str,
+        event_id: str | None,
+        correlation_id: str | None,
+        task_title: str,
+        task_json: dict[str, Any],
+        payload_json: dict[str, Any],
+    ) -> int:
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO task_outbox (
+                    created_ts_ms, user_id, device_id, session_id, event_id, correlation_id,
+                    task_title, task_json, payload_json, status, attempts, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, datetime('now'))
+                """,
+                (
+                    payload_json.get("ts_ms"),
+                    user_id,
+                    device_id,
+                    session_id,
+                    event_id,
+                    correlation_id,
+                    task_title,
+                    json.dumps(task_json, ensure_ascii=False),
+                    json.dumps(payload_json, ensure_ascii=False),
+                ),
+            )
+            self.conn.commit()
+            return int(cur.lastrowid)
+
+    def mark_task_dispatched(
+        self,
+        task_outbox_id: int,
+        *,
+        sent: bool,
+        dispatch_id: str | None = None,
+        task_id: str | None = None,
+        response: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        status = "sent" if sent else "failed"
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                """
+                UPDATE task_outbox
+                SET status = ?, attempts = attempts + 1, last_error = ?, last_response_json = ?,
+                    dispatch_id = ?, task_id = ?, updated_at = datetime('now')
+                WHERE task_outbox_id = ?
+                """,
+                (
+                    status,
+                    error,
+                    json.dumps(response, ensure_ascii=False) if response is not None else None,
+                    dispatch_id,
+                    task_id,
+                    task_outbox_id,
+                ),
+            )
+            self.conn.commit()
+
+    def requeue_failed_task(self, task_outbox_id: int) -> None:
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "UPDATE task_outbox SET status = 'pending', updated_at = datetime('now') WHERE task_outbox_id = ?",
+                (task_outbox_id,),
+            )
+            self.conn.commit()
+
+    def list_tasks(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            cur = self.conn.cursor()
+            if status:
+                cur.execute(
+                    "SELECT * FROM task_outbox WHERE status = ? ORDER BY task_outbox_id DESC LIMIT ?",
+                    (status, limit),
+                )
+            else:
+                cur.execute("SELECT * FROM task_outbox ORDER BY task_outbox_id DESC LIMIT ?", (limit,))
+            rows = cur.fetchall()
+        out = []
+        for row in rows:
+            rec = dict(row)
+            for field in ("task_json", "payload_json", "last_response_json"):
+                if rec.get(field):
+                    try:
+                        rec[field] = json.loads(rec[field])
+                    except Exception:
+                        pass
+            out.append(rec)
+        return out
+
+    def task_summary(self) -> dict[str, int]:
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute("SELECT status, COUNT(*) FROM task_outbox GROUP BY status")
+            rows = cur.fetchall()
+        summary = {status: 0 for status in ("pending", "sent", "failed")}
+        for row in rows:
+            summary[row[0]] = row[1]
+        return summary

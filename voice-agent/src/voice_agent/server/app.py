@@ -1803,6 +1803,10 @@ def create_app(config: AppConfig) -> FastAPI:
     app.state.events = bus
     app.state.meeting_tasks = meeting_tasks
     app.state.assistant = Assistant(config)
+    from ..util.db import Database
+
+    app.state.task_db = Database(Path(config.paths.artifacts_dir) / "results.sqlite")
+    app.state.assistant.db = app.state.task_db
 
     import logging
 
@@ -2801,6 +2805,25 @@ def create_app(config: AppConfig) -> FastAPI:
             return {"correlation_id": correlation_id, "error": f"HTTP {r.status_code}", "events": [], "current_state": "unknown"}
         except Exception as exc:
             return {"correlation_id": correlation_id, "error": str(exc), "events": [], "current_state": "unknown"}
+
+    @app.get("/tasks/reconcile")
+    async def tasks_reconcile_status(request: Request) -> dict[str, Any]:
+        """Drift-style status of the ingested-task outbox (pending vs. failed)."""
+        require_session(request)
+        from ..server.assistant import reconcile_tasks
+
+        return reconcile_tasks(app.state.task_db, requeue_failed=False)
+
+    @app.post("/tasks/reconcile")
+    async def tasks_reconcile_retry(request: Request) -> dict[str, Any]:
+        """Requeue failed task outbox entries and re-dispatch pending + retriable tasks."""
+        require_session(request)
+        from ..server.assistant import reconcile_tasks, retry_failed_tasks
+
+        report = reconcile_tasks(app.state.task_db, requeue_failed=True)
+        dispatch_report = retry_failed_tasks(app.state.task_db)
+        report["retry"] = dispatch_report
+        return report
 
     @app.websocket("/events")
     async def events_ws(websocket: WebSocket) -> None:
