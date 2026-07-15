@@ -199,7 +199,11 @@ def cmd_ingest_dir(args: argparse.Namespace) -> None:
 
 
 def cmd_ingest_auto_ingest(args: argparse.Namespace) -> None:
-    from .auth.neo4j_ingest import collect_audio_paths_from_neo4j
+    from .auth.neo4j_ingest import (
+        collect_audio_paths_from_neo4j,
+        mark_audio_files_enrolled,
+    )
+
     config = _load_config(args.config)
     try:
         files = collect_audio_paths_from_neo4j(
@@ -215,6 +219,23 @@ def cmd_ingest_auto_ingest(args: argparse.Namespace) -> None:
         print(str(exc), file=sys.stderr)
         sys.exit(1)
     result = enroll_from_files(config, args.user, files, append=args.append, source="neo4j")
+    # Close the ingest loop: advance the staged AudioFile nodes from pending to
+    # enrolled so they are not re-pulled on the next run.
+    version_id = result.get("version_id")
+    if version_id and not result.get("errors"):
+        try:
+            advanced = mark_audio_files_enrolled(
+                args.neo4j_uri,
+                args.neo4j_user,
+                args.neo4j_pass,
+                paths=files,
+                enrolled_user_id=args.user,
+                version_id=version_id,
+                database=args.neo4j_database,
+            )
+            result["audio_files_advanced"] = advanced
+        except RuntimeError as exc:
+            print(f"warning: could not mark audio files enrolled: {exc}", file=sys.stderr)
     print(json.dumps(result, indent=2))
 
 

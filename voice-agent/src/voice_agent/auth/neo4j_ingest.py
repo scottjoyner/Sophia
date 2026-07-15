@@ -36,7 +36,14 @@ def collect_audio_paths_from_neo4j(
             )
             result = session.run(query, name=speaker_name, limit=limit)
         else:
-            query = "MATCH (a) WHERE a.path IS NOT NULL RETURN DISTINCT a.path AS path LIMIT $limit"
+            # Keyed by the in-container path so the ingested files resolve inside
+            # the runtime container, and scoped to staged AudioFile nodes that are
+            # still pending (already-enrolled files are skipped on re-runs).
+            query = (
+                "MATCH (a:AudioFile) "
+                "WHERE a.storage_tier = 'ssd_staging' AND a.ingest_status = 'pending' "
+                "RETURN DISTINCT a.container_path AS path LIMIT $limit"
+            )
             result = session.run(query, limit=limit)
         for record in result:
             path = record.get("path")
@@ -44,6 +51,57 @@ def collect_audio_paths_from_neo4j(
                 files.append(path)
     driver.close()
     return files
+
+
+def mark_audio_files_enrolled(
+    uri: str,
+    user: str,
+    password: str,
+    *,
+    paths: list[str],
+    enrolled_user_id: str,
+    version_id: str,
+    database: str | None = None,
+) -> int:
+    """Advance ``AudioFile`` nodes from ``pending`` to ``enrolled`` after a
+    successful auto-ingest enrollment, recording which voiceprint owns them.
+
+    Only ``AudioFile`` nodes currently in the ``ssd_staging`` tier with status
+    ``pending`` are matched, keyed by their container-path so the in-container
+    ingest sees the same identity the staging step registered. Returns the
+    number of nodes advanced.
+    """
+    paths = [str(p) for p in paths if p]
+    if not paths or not password:
+        return 0
+    try:
+        from neo4j import GraphDatabase
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise RuntimeError("neo4j driver not installed") from exc
+
+    driver = GraphDatabase.driver(uri, auth=(user, password))
+    try:
+        with driver.session(database=database) as session:
+            result = session.run(
+                """
+                MATCH (file:AudioFile)
+                WHERE file.storage_tier = 'ssd_staging'
+                  AND file.ingest_status = 'pending'
+                  AND file.container_path IN $paths
+                SET file.ingest_status = 'enrolled',
+                    file.enrolled_user_id = $user_id,
+                    file.enrolled_version_id = $version_id,
+                    file.enrolled_at = datetime(),
+                    file.updated_at = datetime()
+                RETURN count(file) AS advanced
+                """,
+                paths=paths,
+                user_id=enrolled_user_id,
+                version_id=version_id,
+            ).single()
+        return int((result or {}).get("advanced") or 0) if result else 0
+    finally:
+        driver.close()
 
 
 def save_capture_to_neo4j(

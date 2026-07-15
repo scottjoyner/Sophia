@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from voice_agent.auth.registry import VoiceprintRegistry
 from voice_agent.auth.verify import verify_audio_segment
+from voice_agent.auth.voiceprint_graph import VoiceprintGraphStore
 from voice_agent.config import AppConfig, PathsConfig
 from voice_agent.server.app import create_app
 
@@ -245,3 +246,154 @@ def test_voiceprint_status_and_delete_use_registry(monkeypatch: pytest.MonkeyPat
     deleted = client.delete("/voiceprints/device/scott/phone").json()
     assert deleted["deleted"] is True
     assert registry.get_devices("scott") == {}
+
+
+class _FakeTxResult:
+    def __init__(self, rows: list[dict]):
+        self._rows = rows
+        self._idx = 0
+
+    def single(self):
+        return self._rows[0] if self._rows else None
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class _FakeSession:
+    def __init__(self, speaker_match_row=None, owner_match_row=None, global_speaker_row=None):
+        self.speaker_match_row = speaker_match_row
+        self.owner_match_row = owner_match_row
+        self.global_speaker_row = global_speaker_row
+        self.run_calls: list[tuple[str, dict]] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def run(self, cypher: str, **params):
+        self.run_calls.append((cypher, params))
+        lowered = cypher.lower()
+        if "vector.query" in lowered and "speaker_embedding_idx" in lowered:
+            # owner query filters by user_id; speaker query does not
+            if "tolower(node.user_id)" in lowered:
+                return _FakeTxResult([self.owner_match_row] if self.owner_match_row else [])
+            return _FakeTxResult([self.speaker_match_row] if self.speaker_match_row else [])
+        if "globalspeaker" in lowered and "tolower(gs.display_label)" in lowered:
+            return _FakeTxResult([self.global_speaker_row] if self.global_speaker_row else [])
+        return _FakeTxResult([])
+
+
+class _FakeDriver:
+    def __init__(self, session: _FakeSession):
+        self._session = session
+
+    def session(self, database=None):
+        return self._session
+
+    def close(self):
+        return None
+
+
+def _make_store_with_session(session: _FakeSession) -> VoiceprintGraphStore:
+    from voice_agent.auth.voiceprint_graph import VoiceprintGraphStore
+
+    store = VoiceprintGraphStore.__new__(VoiceprintGraphStore)
+    store.EMBEDDING_DIMENSION = 3
+    store.database = "neo4j"
+    store._driver = lambda: _FakeDriver(session)  # type: ignore[assignment]
+    return store
+
+
+def test_link_creates_global_speaker_when_absent() -> None:
+    from voice_agent.auth.voiceprint_graph import link_global_speaker_by_label
+
+    session = _FakeSession(global_speaker_row=None)
+    result = link_global_speaker_by_label(session, "scott", [0.1, 0.2, 0.3])
+    assert result is not None
+    assert result["created"] is True
+    assert result["global_speaker_id"]
+    # A MERGE creating the GlobalSpeaker + the embedding SET must have run.
+    writes = [c for c in session.run_calls if "MERGE (gs:GlobalSpeaker" in c[0]]
+    assert len(writes) >= 1
+
+
+def test_link_uses_existing_global_speaker() -> None:
+    from voice_agent.auth.voiceprint_graph import link_global_speaker_by_label
+
+    session = _FakeSession(global_speaker_row={"id": "gs-123", "display_label": "scott"})
+    result = link_global_speaker_by_label(session, "scott", [0.1, 0.2, 0.3])
+    assert result["global_speaker_id"] == "gs-123"
+    assert result["created"] is False
+
+
+def test_foreign_absorption_rejected_when_owner_match_is_better() -> None:
+    from voice_agent.auth.voiceprint_graph import VoiceprintGraphStore
+
+    session = _FakeSession(
+        # A foreign speaker matches at 0.90 (above threshold)
+        speaker_match_row={"speaker_user_id": "intruder", "score": 0.90},
+        # But owner's own embedding matches at 0.95 (better) => do NOT absorb
+        owner_match_row={"score": 0.95},
+        global_speaker_row=None,
+    )
+    store = _make_store_with_session(session)
+    result = store.link_identity_to_global_speakers("scott", [0.1, 0.2, 0.3], match_threshold=0.80)
+    assert result["method"] == "embedding_match_existing_owner"
+    assert result["matched_speaker_user_id"] == "scott"
+
+
+def test_foreign_absorption_allowed_when_foreign_is_clearly_better() -> None:
+    from voice_agent.auth.voiceprint_graph import VoiceprintGraphStore
+
+    session = _FakeSession(
+        speaker_match_row={"speaker_user_id": "intruder", "score": 0.97},
+        owner_match_row={"score": 0.60},
+        global_speaker_row=None,
+    )
+    store = _make_store_with_session(session)
+    result = store.link_identity_to_global_speakers("scott", [0.1, 0.2, 0.3], match_threshold=0.80)
+    assert result["method"] == "embedding_match"
+    assert result["matched_speaker_user_id"] == "intruder"
+
+
+def test_device_scope_save_triggers_speaker_linkage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from voice_agent.auth.voiceprint_graph import VoiceprintGraphStore
+
+    store = VoiceprintGraphStore.__new__(VoiceprintGraphStore)
+    store.EMBEDDING_DIMENSION = 3
+    store.database = "neo4j"
+
+    calls: dict[str, object] = {}
+
+    def fake_get_active_record(user_id: str):
+        calls["get_active_record"] = user_id
+        return {"embedding": [0.1, 0.2, 0.3]}
+
+    def fake_link(user_id, embedding, *, match_threshold=0.85):
+        calls["link_user_id"] = user_id
+        calls["link_embedding"] = list(embedding)
+        return {"linked": True, "method": "label_match"}
+
+    monkeypatch.setattr(store, "get_active_record", fake_get_active_record)
+    monkeypatch.setattr(store, "link_identity_to_global_speakers", fake_link)
+
+    # Avoid touching Neo4j for the version/group writes.
+    fake_session = _FakeSession()
+    store._driver = lambda: _FakeDriver(fake_session)  # type: ignore[assignment]
+
+    store.save_voiceprint(
+        user_id="scott",
+        embedding_mean=[0.1, 0.2, 0.3],
+        samples=_sample_samples(),
+        threshold=0.75,
+        source="seed",
+        append=False,
+        device_id="phone",
+    )
+    # Device-scope save must still keep the owner's global Speaker current,
+    # using the identity-scope embedding.
+    assert calls.get("link_user_id") == "scott"
+    assert calls.get("link_embedding") == [0.1, 0.2, 0.3]

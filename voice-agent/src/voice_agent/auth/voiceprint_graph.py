@@ -7,6 +7,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+import numpy as np
+
 from ..config import Neo4jConfig
 
 
@@ -65,10 +67,28 @@ def link_global_speaker_by_label(session, user_id: str, embedding: Sequence[floa
             """,
             user_id=user_id,
         ).single()
-        if not row:
-            return None
-        global_id = row["id"]
-        global_label = row.get("display_label") or user_id
+        global_id = row["id"] if row else None
+        created = False
+        if not global_id:
+            # The owner's global speaker may not yet exist (e.g. fresh fleet).
+            # Create it so the trained owner voiceprint always lands in the
+            # global pool instead of being silently dropped.
+            import uuid as _uuid
+
+            global_id = _uuid.uuid4().hex
+            global_label = user_id
+            created = True
+            session.run(
+                """
+                MERGE (gs:GlobalSpeaker {id: $global_id})
+                SET gs.display_label = $display_label,
+                    gs.is_owner_voiceprint = true,
+                    gs.created_at = datetime()
+                """,
+                global_id=global_id,
+                display_label=global_label,
+            )
+        global_label = global_id
         session.run(
             """
             MERGE (identity:VoiceIdentity {user_id: $user_id})
@@ -87,6 +107,7 @@ def link_global_speaker_by_label(session, user_id: str, embedding: Sequence[floa
             "global_speaker_id": global_id,
             "display_label": global_label,
             "method": "label_match",
+            "created": bool(created),
         }
     except Exception:
         return None
@@ -185,6 +206,16 @@ class VoiceprintGraphStore:
                         `vector.similarity_function`: 'COSINE'
                     }}}}
                     """,
+                ),
+                (
+                    "voice_identity_user_id_uniqueness",
+                    "CREATE CONSTRAINT voice_identity_user_id_uniq IF NOT EXISTS "
+                    "FOR (n:VoiceIdentity) REQUIRE n.user_id IS UNIQUE",
+                ),
+                (
+                    "speaker_user_id_uniqueness",
+                    "CREATE CONSTRAINT speaker_user_id_uniq IF NOT EXISTS "
+                    "FOR (n:Speaker) REQUIRE n.user_id IS UNIQUE",
                 ),
             ]
             driver = None
@@ -538,6 +569,23 @@ class VoiceprintGraphStore:
                 )
             except Exception as exc:
                 record["speaker_linkage"] = {"linked": False, "error": f"{type(exc).__name__}: {exc}"}
+        else:
+            # Device-scope enrollments must also keep the owner's global Speaker
+            # node current, otherwise the identity's speaker embedding is only
+            # ever seeded from the first identity-scope enrollment.
+            try:
+                identity_record = self.get_active_record(user_id)
+                identity_embedding = (identity_record or {}).get("embedding") or []
+                if identity_embedding:
+                    record["speaker_linkage"] = self.link_identity_to_global_speakers(
+                        user_id, identity_embedding, match_threshold=threshold
+                    )
+                else:
+                    record["speaker_linkage"] = self.link_identity_to_global_speakers(
+                        user_id, embedding_mean, match_threshold=threshold
+                    )
+            except Exception as exc:
+                record["speaker_linkage"] = {"linked": False, "error": f"{type(exc).__name__}: {exc}"}
         return record
 
     def link_identity_to_global_speakers(
@@ -593,6 +641,59 @@ class VoiceprintGraphStore:
 
                 best_score = float(best_row["score"]) if best_row else 0.0
                 if best_row and str(best_row.get("speaker_user_id")) != str(user_id) and best_score >= match_threshold:
+                    # Exclusive absorption guard: only cross-link the owner to a
+                    # *foreign* Speaker when the match is clearly better than the
+                    # owner's own embedding (never absorb a near-threshold foreign
+                    # match that could mis-unify the owner's identity).
+                    embed = np.asarray(embedding, dtype=float)
+                    norm = float(np.linalg.norm(embed))
+                    if norm:
+                        embed = embed / norm
+                    owner_rows = [
+                        dict(r)
+                        for r in session.run(
+                            """
+                            CALL db.index.vector.queryNodes('speaker_embedding_idx', 1, $embedding) YIELD node, score
+                            WHERE node:Speaker AND toLower(node.user_id) = toLower($user_id)
+                            RETURN score AS score
+                            LIMIT 1
+                            """,
+                            embedding=list(embedding),
+                            user_id=user_id,
+                        )
+                    ]
+                    self_score = float(owner_rows[0]["score"]) if owner_rows else 0.0
+                    if self_score >= best_score:
+                        method = "embedding_match_existing_owner"
+                        session.run(
+                            """
+                            MERGE (speaker:Speaker {user_id: $user_id})
+                              ON CREATE SET speaker.name = $user_id, speaker.created_at = datetime()
+                            SET speaker.embedding = $embedding,
+                                speaker.is_owner_voiceprint = true,
+                                speaker.updated_at = datetime()
+                            WITH speaker
+                            MERGE (identity:VoiceIdentity {user_id: $user_id})
+                            MERGE (identity)-[r:IS_SPEAKER]->(speaker)
+                            SET r.score = 1.0, r.method = $method, r.linked_at = datetime()
+                            """,
+                            user_id=user_id,
+                            embedding=list(embedding),
+                            method=method,
+                        )
+                        global_link = link_global_speaker_by_label(session, user_id, embedding)
+                        result = {
+                            "linked": True,
+                            "enabled": True,
+                            "created": True,
+                            "matched_speaker_user_id": user_id,
+                            "score": 1.0,
+                            "method": method,
+                        }
+                        if global_link:
+                            result["global_speaker"] = global_link
+                        return result
+
                     speaker_user_id = str(best_row["speaker_user_id"])
                     session.run(
                         """
