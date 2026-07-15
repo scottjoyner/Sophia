@@ -272,7 +272,29 @@ def test_voice_login_rejects_unknown(tmp_path, monkeypatch) -> None:
         data={"user_id": "nobody"},
     )
     assert r.status_code == 401
-    assert r.json()["authenticated"] is False
+    body = r.json()
+    assert body["authenticated"] is False
+    assert body["reason"] in {"no_voiceprint_enrolled", "voice_mismatch"}
+    assert body.get("needs_enrollment") is True or body["reason"] == "voice_mismatch"
+
+
+def test_session_cookie_uses_configured_samesite(tmp_path, monkeypatch) -> None:
+    client = _make_client(tmp_path, monkeypatch)
+    r = client.post("/auth/login", json={"passphrase": "test-pass"})
+    assert r.status_code == 200
+    set_cookie = r.headers.get("set-cookie", "")
+    assert "sophia_session=" in set_cookie
+    # Default samesite is 'lax' (was previously hardcoded 'strict').
+    assert "samesite=lax" in set_cookie.lower()
+
+
+def test_logout_clears_session_cookie(tmp_path, monkeypatch) -> None:
+    client = _make_client(tmp_path, monkeypatch)
+    client.post("/auth/login", json={"passphrase": "test-pass"})
+    r = client.post("/auth/logout")
+    assert r.status_code == 200
+    # After logout, the session endpoint reports unauthenticated.
+    assert client.get("/auth/session").json()["authenticated"] is False
 
 
 def test_enroll_silent_clip_rejected(tmp_path, monkeypatch) -> None:

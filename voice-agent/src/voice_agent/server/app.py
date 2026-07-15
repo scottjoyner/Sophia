@@ -1989,6 +1989,13 @@ def create_app(config: AppConfig) -> FastAPI:
             },
         )
 
+    def _cookie_secure(request: Request, cfg: AppConfig) -> bool:
+        # Explicit config wins; otherwise infer from the inbound scheme (correct
+        # behind a TLS-terminating reverse proxy only when it forwards the scheme).
+        if cfg.auth.session_cookie_secure is not None:
+            return cfg.auth.session_cookie_secure
+        return request.url.scheme == "https"
+
     @app.get("/auth/session")
     async def auth_session(request: Request) -> dict[str, Any]:
         token = request.cookies.get(SESSION_COOKIE)
@@ -2009,16 +2016,21 @@ def create_app(config: AppConfig) -> FastAPI:
             SESSION_COOKIE,
             token,
             httponly=True,
-            samesite="strict",
+            samesite=config.auth.session_cookie_samesite,
             max_age=SESSION_TTL_SECONDS,
-            secure=request.url.scheme == "https",
+            secure=_cookie_secure(request, config),
         )
         return resp
 
     @app.post("/auth/logout")
-    async def auth_logout() -> Response:
+    async def auth_logout(request: Request) -> Response:
         resp = JSONResponse({"ok": True, "authenticated": False})
-        resp.delete_cookie(SESSION_COOKIE)
+        resp.delete_cookie(
+            SESSION_COOKIE,
+            path="/",
+            samesite=config.auth.session_cookie_samesite,
+            secure=_cookie_secure(request, config),
+        )
         return resp
 
     @app.post("/auth/voice-login")
@@ -2038,20 +2050,28 @@ def create_app(config: AppConfig) -> FastAPI:
             payload["neo4j_logged"] = _log_voice_ui_event_to_neo4j("voice_auth_verified", payload)
             bus.publish("ui_voice_auth_verified", payload)
             if not payload.get("accepted"):
+                if not payload.get("voiceprint_version_id"):
+                    reason = "no_voiceprint_enrolled"
+                else:
+                    reason = payload.get("fallback_reason") or "voice_mismatch"
+                payload["reason"] = reason
+                payload["needs_enrollment"] = reason == "no_voiceprint_enrolled"
                 return JSONResponse(
-                    {"ok": True, "authenticated": False, **payload},
+                    {"ok": True, "authenticated": False, "reason": reason, **payload},
                     status_code=401,
                 )
             token = create_session_token()
             user_id_out = config.auth.owner_user_id
-            resp = JSONResponse({"ok": True, "authenticated": True, "user_id": user_id_out, **payload})
+            resp = JSONResponse(
+                {"ok": True, "authenticated": True, "user_id": user_id_out, "reason": "voice_match", **payload}
+            )
             resp.set_cookie(
                 SESSION_COOKIE,
                 token,
                 httponly=True,
-                samesite="strict",
+                samesite=config.auth.session_cookie_samesite,
                 max_age=SESSION_TTL_SECONDS,
-                secure=request.url.scheme == "https",
+                secure=_cookie_secure(request, config),
             )
             return resp
         except Exception as exc:

@@ -26,6 +26,8 @@ class AuthConfig(BaseModel):
     adaptive_threshold_max: float = 1.0
     adaptive_threshold_alpha: float = 0.1
     adaptive_threshold_margin: float = 0.05
+    session_cookie_samesite: str = "lax"
+    session_cookie_secure: bool | None = None
 
 
 class STTConfig(BaseModel):

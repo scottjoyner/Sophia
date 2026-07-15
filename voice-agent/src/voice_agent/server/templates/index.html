@@ -485,31 +485,50 @@
   loginMic.addEventListener('touchstart', (e) => { e.preventDefault(); startLoginVoice(); });
   loginMic.addEventListener('touchend', (e) => { e.preventDefault(); stopLoginVoice(); });
 
+  const MAX_LOGIN_CLIP_MS = 8000;
+  let loginRecStopTimer = null;
+  let loginRecStart = 0;
+  function _endLoginRecording() {
+    if (!state.recorder || state.recorder.state === 'inactive') return;
+    clearTimeout(loginRecStopTimer); loginRecStopTimer = null;
+    loginMic.classList.remove('rec'); loginMic.textContent = '🎙';
+    const stopped = new Promise((res) => { state.recorder.onstop = res; });
+    try { state.recorder.stop(); } catch {}
+    stopped.then(() => {
+      if (state.micStream) state.micStream.getTracks().forEach(t => t.stop());
+      const mime = (state.recorder && state.recorder.mimeType) || 'audio/webm';
+      const blob = new Blob(state.micChunks, { type: mime });
+      state.lastVoiceBlob = blob;
+      if (!blob || !blob.size) {
+        $('voiceLoginStatus').style.color = 'var(--red)';
+        $('voiceLoginStatus').textContent = 'No audio captured — allow mic access and try again.';
+        return;
+      }
+      $('voiceLoginStatus').style.color = 'var(--muted)';
+      $('voiceLoginStatus').textContent = 'Clip ready — tap “Unlock with voice”.';
+    });
+  }
   async function startLoginVoice() {
     if (!navigator.mediaDevices || !window.MediaRecorder) { toast('Voice unlock needs a secure context + mic.'); return; }
+    if (state.recorder && state.recorder.state !== 'inactive') return;
     try {
       state.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       state.recorder = new MediaRecorder(state.micStream);
       state.micChunks = [];
-      state.recorder.ondataavailable = (ev) => { if (ev.data.size) state.micChunks.push(ev.data); };
+      state.recorder.ondataavailable = (ev) => { if (ev.data && ev.data.size) state.micChunks.push(ev.data); };
       state.recorder.start();
       loginMic.classList.add('rec'); loginMic.textContent = '●';
       $('voiceLoginStatus').style.color = 'var(--muted)';
-      $('voiceLoginStatus').textContent = 'Recording… release to finish.';
-    } catch { toast('Microphone blocked.'); }
+      $('voiceLoginStatus').textContent = 'Recording… release to finish (max 8s).';
+      loginRecStart = Date.now();
+      // Auto-stop after the max clip length so a missed pointerup can't strand the recording.
+      loginRecStopTimer = setTimeout(_endLoginRecording, MAX_LOGIN_CLIP_MS);
+      // Release anywhere (not just on the button) ends the clip.
+      document.addEventListener('pointerup', _endLoginRecording, { once: true });
+      document.addEventListener('pointercancel', _endLoginRecording, { once: true });
+    } catch { toast('Microphone blocked or unavailable.'); }
   }
-  async function stopLoginVoice() {
-    if (!state.recorder || state.recorder.state === 'inactive') return;
-    loginMic.classList.remove('rec'); loginMic.textContent = '🎙';
-    const stopped = new Promise((res) => state.recorder.onstop = res);
-    state.recorder.stop(); await stopped;
-    if (state.micStream) state.micStream.getTracks().forEach(t => t.stop());
-    const blob = new Blob(state.micChunks, { type: state.recorder.mimeType || 'audio/webm' });
-    state.lastVoiceBlob = blob;
-    if (!blob.size) return;
-    $('voiceLoginStatus').style.color = 'var(--muted)';
-    $('voiceLoginStatus').textContent = 'Clip ready — tap “Unlock with voice”.';
-  }
+  function stopLoginVoice() { _endLoginRecording(); }
   $('voiceLoginBtn').addEventListener('click', async () => {
     if (!state.lastVoiceBlob || !state.lastVoiceBlob.size) {
       $('voiceLoginStatus').style.color = 'var(--red)';
@@ -520,17 +539,24 @@
     $('voiceLoginStatus').textContent = 'Verifying voice identity…';
     const form = new FormData();
     form.append('audio', state.lastVoiceBlob, 'voice-login.webm');
-    form.append('user_id', 'scott'); form.append('session_id', 'console');
+    form.append('user_id', (state.session && state.session.user_id) || 'scott');
+    form.append('session_id', 'console');
     try {
       const r = await api('/auth/voice-login', { method: 'POST', body: form });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({}));
       if (r.ok && d.authenticated) { location.reload(); return; }
       const pct = ((d.score || 0) * 100).toFixed(0);
       $('voiceLoginStatus').style.color = 'var(--red)';
-      $('voiceLoginStatus').textContent = 'Voice rejected ' + pct + '% — try again or use your passphrase.';
+      if (d.reason === 'no_voiceprint_enrolled') {
+        $('voiceLoginStatus').textContent = 'No voiceprint enrolled yet — enroll your voice first, or use your passphrase.';
+      } else if (d.reason === 'voice_mismatch') {
+        $('voiceLoginStatus').textContent = 'Voice rejected (' + pct + '%) — try again or use your passphrase.';
+      } else {
+        $('voiceLoginStatus').textContent = 'Voice unlock failed — use your passphrase.';
+      }
     } catch {
       $('voiceLoginStatus').style.color = 'var(--red)';
-      $('voiceLoginStatus').textContent = 'Voice unlock failed.';
+      $('voiceLoginStatus').textContent = 'Voice unlock failed — use your passphrase.';
     } finally { $('voiceLoginBtn').disabled = false; }
   });
   $('loginForm').addEventListener('submit', async (e) => {
@@ -538,8 +564,10 @@
     const btn = $('loginBtn'); btn.disabled = true; $('loginError').textContent = '';
     try {
       const r = await api('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passphrase: $('pass').value }) });
-      if (r.ok) location.reload();
-      else $('loginError').textContent = 'Invalid passphrase.';
+      if (r.ok) { location.reload(); return; }
+      let msg = 'Invalid passphrase.';
+      try { const d = await r.json(); if (d && d.detail) msg = d.detail; } catch {}
+      $('loginError').textContent = msg;
     } catch { $('loginError').textContent = 'Login request failed.'; }
     finally { btn.disabled = false; }
   });
