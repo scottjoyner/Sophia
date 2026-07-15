@@ -135,6 +135,27 @@ def test_voiceprint_admin_endpoints_require_session(tmp_path, monkeypatch) -> No
         assert r.status_code == 401, path
 
 
+def test_reconcile_status_requires_session(tmp_path, monkeypatch) -> None:
+    client = _make_client(tmp_path, monkeypatch)
+    assert client.get("/voiceprints/reconcile/status").status_code == 401
+
+
+def test_reconcile_status_reports_no_graph(tmp_path, monkeypatch) -> None:
+    client = _make_client(tmp_path, monkeypatch, override=True)
+    client = _login(client)
+    r = client.get("/voiceprints/reconcile/status", params={"admin_key": "test-admin-key"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert body["check_only"] is True
+
+
+def test_destructive_endpoints_require_session(tmp_path, monkeypatch) -> None:
+    client = _make_client(tmp_path, monkeypatch)
+    assert client.delete("/voiceprints/device/alice/phone").status_code == 401
+    assert client.delete("/meeting/history/m1").status_code == 401
+
+
 def test_voiceprints_status_lists_enrolled(tmp_path, monkeypatch) -> None:
     client = _make_client(tmp_path, monkeypatch)
     _enroll_alice(client, tmp_path)
@@ -145,6 +166,7 @@ def test_voiceprints_status_lists_enrolled(tmp_path, monkeypatch) -> None:
 
 def test_delete_device_missing_returns_ok_false(tmp_path, monkeypatch) -> None:
     client = _make_client(tmp_path, monkeypatch)
+    client = _login(client)
     r = client.delete("/voiceprints/device/alice/phone")
     assert r.status_code == 200
     assert r.json()["deleted"] is False
@@ -172,6 +194,7 @@ def test_meeting_status_unknown_404(tmp_path, monkeypatch) -> None:
 
 def test_meeting_history_and_detail_no_neo4j(tmp_path, monkeypatch) -> None:
     client = _make_client(tmp_path, monkeypatch)
+    client = _login(client)
     assert client.get("/meeting/history").json()["meetings"] == []
     assert "error" in client.get("/meeting/history/m1").json()
     assert client.delete("/meeting/history/m1").status_code == 400

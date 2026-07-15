@@ -2527,6 +2527,22 @@ def create_app(config: AppConfig) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
 
+    @app.get("/voiceprints/reconcile/status")
+    async def voiceprints_reconcile_status(request: Request, admin_key: str = "") -> dict[str, Any]:
+        require_session(request)
+        _require_owner_override(config, config.auth.owner_user_id, admin_key)
+        registry = _voiceprint_registry()
+        if not registry.graph:
+            return {
+                "ok": False,
+                "error": "Neo4j not configured; cannot compute drift status.",
+                "check_only": True,
+            }
+        try:
+            return {"ok": True, **registry.reconcile_to_neo4j(check_only=True)}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+
     @app.post("/voiceprints/train-neo4j")
     async def train_voiceprint_from_neo4j(request: Request, req: Neo4jEnrollRequest) -> dict[str, Any]:
         require_session(request)
@@ -2685,7 +2701,8 @@ def create_app(config: AppConfig) -> FastAPI:
             return {"users": [], "error": f"{type(exc).__name__}: {exc}"}
 
     @app.delete("/voiceprints/device/{user_id}/{device_id}")
-    async def voiceprints_delete_device(user_id: str, device_id: str) -> dict[str, Any]:
+    async def voiceprints_delete_device(request: Request, user_id: str, device_id: str) -> dict[str, Any]:
+        require_session(request)
         try:
             deleted = _voiceprint_registry().delete_device(user_id, device_id)
             return {"ok": True, "user_id": user_id, "device_id": device_id, "deleted": deleted}
@@ -2693,7 +2710,8 @@ def create_app(config: AppConfig) -> FastAPI:
             raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
 
     @app.delete("/meeting/history/{meeting_id}")
-    async def meeting_delete(meeting_id: str) -> dict[str, Any]:
+    async def meeting_delete(request: Request, meeting_id: str) -> dict[str, Any]:
+        require_session(request)
         if not config.neo4j.password:
             raise HTTPException(status_code=400, detail="Neo4j not configured")
         from neo4j import GraphDatabase

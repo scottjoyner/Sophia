@@ -232,7 +232,10 @@ def test_voiceprint_status_and_delete_use_registry(monkeypatch: pytest.MonkeyPat
     )
 
     monkeypatch.setattr("voice_agent.server.app.VoiceprintRegistry", lambda path, config=None: registry)
+    monkeypatch.setenv("SOPHIA_APP_PASSWORD", "sophia")
+    monkeypatch.setenv("SOPHIA_SESSION_SECRET", "test-secret")
     client = TestClient(create_app(config))
+    client.post("/auth/login", json={"passphrase": "sophia"})
 
     status = client.get("/voiceprints/status").json()
     assert status["count"] == 1
