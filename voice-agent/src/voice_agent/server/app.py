@@ -1627,33 +1627,33 @@ def _cleanup_paths(*paths: Path) -> None:
 
 
 class MeetingTaskManager:
-    def __init__(self):
-        self._tasks: dict[str, dict[str, Any]] = {}
+    """In-memory facade over the durable SQLite-backed MeetingTaskStore.
+
+    Kept for backward compatibility with call sites that used the old
+    in-memory dict API (create/update/get). State now survives restart via
+    the SQLite store (LLD §3.1 W-10).
+    """
+
+    def __init__(self, store: "MeetingTaskStore | None" = None):
+        from .meeting_task_store import MeetingTaskStore
+        from ..util.db import Database
+        import tempfile
+
+        if store is None:
+            # Fallback path used only when no shared DB is wired in (e.g. some
+            # unit tests). Uses a throwaway in-memory SQLite file.
+            db = Database(Path(tempfile.gettempdir()) / "sophia_meeting_tasks_fallback.sqlite")
+            store = MeetingTaskStore(db)
+        self._store = store
 
     def create(self, task_id: str) -> None:
-        self._tasks[task_id] = {
-            "task_id": task_id,
-            "status": "queued",
-            "progress_pct": 0,
-            "step": "queued",
-            "result": None,
-            "error": None,
-        }
+        self._store.create(task_id)
 
     def update(self, task_id: str, status: str, step: str, pct: int, result: Any = None, error: str | None = None) -> None:
-        t = self._tasks.get(task_id)
-        if t is None:
-            return
-        t["status"] = status
-        t["step"] = step
-        t["progress_pct"] = pct
-        if result is not None:
-            t["result"] = result
-        if error is not None:
-            t["error"] = error
+        self._store.update(task_id, status, step, pct, result=result, error=error)
 
     def get(self, task_id: str) -> dict[str, Any] | None:
-        return self._tasks.get(task_id)
+        return self._store.get(task_id)
 
 
 async def _process_meeting_background(
@@ -1827,21 +1827,23 @@ def create_app(config: AppConfig) -> FastAPI:
         event_callback=lambda event_type, payload: bus.publish(event_type, payload),
     )
     protocol = build_protocol_adapter(config.server.protocol)
-    meeting_tasks = MeetingTaskManager()
     app.state.config = config
     app.state.manager = manager
     app.state.events = bus
-    app.state.meeting_tasks = meeting_tasks
     app.state.assistant = Assistant(config)
     from ..server.graph_outbox import GraphOutbox
     from ..server.reconciliation_supervisor import ReconciliationSupervisor
     from ..util.db import Database
+    from .meeting_task_store import MeetingTaskStore
 
     app.state.task_db = Database(Path(config.paths.artifacts_dir) / "results.sqlite")
     app.state.assistant.db = app.state.task_db
     app.state.graph_outbox = GraphOutbox(Path(config.paths.artifacts_dir) / "results.sqlite")
     global _graph_outbox
     _graph_outbox = app.state.graph_outbox
+    # W-10: meeting task progress is persisted to SQLite (task_state, not memory).
+    app.state.meeting_tasks = MeetingTaskManager(MeetingTaskStore(app.state.task_db))
+    meeting_tasks = app.state.meeting_tasks
     app.state.registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite", config)
     app.state.supervisor = ReconciliationSupervisor(
         config,
