@@ -122,18 +122,7 @@ The plugin exposes:
 
 ## Legacy
 
-The older scripts below are preserved as historical experiments.
-
-### Sophia V0.1 (original dictation tool)
-```bash
-pip install -r requirements.txt
-cd sophia_V.01
-python sophia.py
-```
-
-### Sophia V0.2 (DeepSpeech)
-```bash
-wget https://github.com/mozilla/DeepSpeech/releases/download/v0.7.0/deepspeech-0.7.0-models.pbmm
-wget https://github.com/mozilla/DeepSpeech/releases/download/v0.7.0/deepspeech-0.7.0-models.scorer
-python sophia_V.02/Sophia_io.py -m deepspeech-0.7.0-models.pbmm -s deepspeech-0.7.0-models.scorer
-```
+The original V0.1/V0.2 dictation experiments (`sophia_V.01`, `sophia_V.02`) are no
+longer present in this repository. Their historical code was archived under
+`archive/` (e.g. `archive/Sophia_io.py`). The maintained service is the
+`voice-agent/` package described above.
