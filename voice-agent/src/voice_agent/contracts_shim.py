@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 # Local thin shim mirroring the canonical auto-assist contract enum
 # (src/assistx/contracts/event_envelope.py :: AuthState). We deliberately do NOT
@@ -10,7 +10,7 @@ from enum import Enum
 # correlation_id is REQUIRED on every emitted envelope (see assistx_dispatch).
 
 
-class AuthState(str, Enum):
+class AuthState(StrEnum):
     AUTHENTICATED_SCOTT = "authenticated_scott"
     UNKNOWN_SPEAKER = "unknown_speaker"
     REGISTERED_USER_UNVERIFIED = "registered_user_unverified"

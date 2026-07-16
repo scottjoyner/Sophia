@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import threading
-from pathlib import Path
 from typing import Any
 
 from ..util.db import Database

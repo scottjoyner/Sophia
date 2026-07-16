@@ -66,6 +66,7 @@ from .auth_session import (
     login as auth_login_check,
 )
 from .events import EventBus, event_to_dict
+from .meeting_task_store import MeetingTaskStore
 from .protocols import build_protocol_adapter
 from .rate_limits import install_rate_limiter
 from .request_hardening import install_request_hardening
@@ -1634,10 +1635,11 @@ class MeetingTaskManager:
     the SQLite store (LLD §3.1 W-10).
     """
 
-    def __init__(self, store: "MeetingTaskStore | None" = None):
-        from .meeting_task_store import MeetingTaskStore
-        from ..util.db import Database
+    def __init__(self, store: MeetingTaskStore | None = None):
         import tempfile
+
+        from ..util.db import Database
+        from .meeting_task_store import MeetingTaskStore
 
         if store is None:
             # Fallback path used only when no shared DB is wired in (e.g. some

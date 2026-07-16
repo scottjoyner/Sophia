@@ -5,7 +5,6 @@ from __future__ import annotations
 # (gated behind SOPHIA_LOCAL_FLEET_DISCOVERY / config.local_fleet_discovery) and
 # Sophia now delegates routing to the auto-router. Kept for transitional use;
 # do not extend — route new workloads through auto-router/auto-assign.
-
 import logging
 import re
 import threading

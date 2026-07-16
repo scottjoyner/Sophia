@@ -136,7 +136,6 @@ def save_capture_to_neo4j(
     # W-16: vector embedding for the capture (schema field EMBEDDING_FIELD).
     # Empty when no embedder is available — the vector index backfills later.
     capture_embedding = embedding_payload(transcript or "").get(EMBEDDING_FIELD)
-    transcript_embedding = capture_embedding
     client_capture_id = str(metadata.get("client_capture_id") or "").strip()
     capture_dedupe_key = f"client:{client_capture_id}" if client_capture_id else f"server:{capture_id}"
     transcript_id = f"{capture_dedupe_key}:transcript"

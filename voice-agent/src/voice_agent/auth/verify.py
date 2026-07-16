@@ -6,7 +6,6 @@ import numpy as np
 
 from ..config import AppConfig
 from ..contracts_shim import (
-    ADMIN_VOICE_OVERRIDE,
     AUTHENTICATED_SCOTT,
     REGISTERED_USER_UNVERIFIED,
     REJECTED,

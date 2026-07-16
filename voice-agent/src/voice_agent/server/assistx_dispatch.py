@@ -12,10 +12,10 @@ from typing import Any
 import httpx
 
 from ..contracts_shim import (
-    AUTHENTICATED_SCOTT,
     ADMIN_VOICE_OVERRIDE,
-    REJECTED,
+    AUTHENTICATED_SCOTT,
     REGISTERED_USER_UNVERIFIED,
+    REJECTED,
     UNKNOWN_SPEAKER,
 )
 
