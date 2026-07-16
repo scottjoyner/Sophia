@@ -4,6 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Sophia</title>
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Sophia">
+  <meta name="theme-color" content="#0b0f14">
   <style>
     :root {
       color-scheme: dark;
@@ -385,17 +392,42 @@
   function el(id) { return document.getElementById(id); }
 
   let isOffline = !navigator.onLine;
-  const offlineQueue = [];
+  // IndexedDB-backed offline queue so captures/tasks survive reloads and flush
+  // to the server (and its graph/task outboxes) when Tailscale comes back.
+  const DB_NAME = 'sophia_offline', STORE = 'queue';
+  function _openDB() {
+    return new Promise((res, rej) => {
+      if (!window.indexedDB) return rej(new Error('no indexeddb'));
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => { req.result.createObjectStore(STORE, { keyPath: 'id' }); };
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    });
+  }
+  async function _dbCount() { try { const db = await _openDB(); return await new Promise((res) => { const tx = db.transaction(STORE, 'readonly'); tx.objectStore(STORE).count().onsuccess = (e) => res(e.target.result); }); } catch { return 0; } }
+  async function enqueueOffline(item) {
+    item.id = item.id || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+    try { const db = await _openDB(); await new Promise((res, rej) => { const tx = db.transaction(STORE, 'readwrite'); tx.objectStore(STORE).put(item); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); } catch {}
+    updateNetPill();
+  }
+  async function flushOffline() {
+    let items = [];
+    try {
+      const db = await _openDB();
+      items = await new Promise((res) => { const tx = db.transaction(STORE, 'readonly'); const r = tx.objectStore(STORE).getAll(); r.onsuccess = () => res(r.result || []); r.onerror = () => res([]); });
+    } catch { return; }
+    for (const it of items) {
+      try { await it.fn(); await _dbDelete(it.id); } catch {}
+    }
+    updateNetPill();
+  }
+  async function _dbDelete(id) { try { const db = await _openDB(); await new Promise((res) => { const tx = db.transaction(STORE, 'readwrite'); tx.objectStore(STORE).delete(id); tx.oncomplete = res; }); } catch {} }
   function updateNetPill() {
     const p = $('netPill');
-    if (isOffline) { p.className = 'pill bad'; p.textContent = 'net: offline' + (offlineQueue.length ? ' (' + offlineQueue.length + ' queued)' : ''); }
-    else { p.className = 'pill ok'; p.textContent = 'net: online'; }
-  }
-  function enqueueOffline(fn) { if (!offlineQueue.includes(fn)) offlineQueue.push(fn); updateNetPill(); }
-  async function flushOffline() {
-    if (!offlineQueue.length) return;
-    const pending = offlineQueue.splice(0, offlineQueue.length); updateNetPill();
-    for (const fn of pending) { try { await fn(); } catch {} }
+    _dbCount().then((n) => {
+      if (isOffline) { p.className = 'pill bad'; p.textContent = 'net: offline' + (n ? ' (' + n + ' queued)' : ''); }
+      else { p.className = 'pill ok'; p.textContent = 'net: online'; }
+    });
   }
   window.addEventListener('offline', () => { isOffline = true; updateNetPill(); });
   window.addEventListener('online', () => { isOffline = false; updateNetPill(); flushOffline(); });
@@ -635,7 +667,7 @@
       assistantEl.querySelector('.caret')?.remove();
       if (isOffline) {
         assistantEl.innerHTML = escapeHtml('⚠ Offline — message queued, will send when connection returns.');
-        enqueueOffline(() => { assistantEl.remove(); sendRaw(text); });
+        enqueueOffline({ fn: () => { assistantEl.remove(); sendRaw(text); } });
       } else {
         assistantEl.innerHTML = escapeHtml('⚠ Could not reach the assistant: ' + err.message);
         const mp = $('modelPill'); mp.className = 'pill bad'; mp.textContent = 'model: error';
@@ -778,7 +810,7 @@
       if (showToast) toast((d.accepted ? 'Voice accepted ' : 'Voice rejected ') + pct + '%', 3200);
       refreshVoiceHealth();
     } catch (err) {
-      if (isOffline) { setVoice('', 'Offline — voice check queued, will retry later.'); enqueueOffline(() => verifyVoiceCheck(false)); }
+      if (isOffline) { setVoice('', 'Offline — voice check queued, will retry later.'); enqueueOffline({ fn: () => verifyVoiceCheck(false) }); }
       else setVoice('bad', 'Voice check failed.');
     }
   }
@@ -917,21 +949,35 @@
   async function transcribeAndShow() {
     const blob = capBlob || capFileBlob;
     if (!blob) return;
+    const clientCaptureId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
     const form = new FormData();
     form.append('audio', blob, 'capture.webm');
     form.append('transcript', '');
     form.append('user_id', state.session.user_id || 'scott');
     form.append('session_id', 'console');
     form.append('activity_context', $('capContext').value || '');
-    try {
+    form.append('client_capture_id', clientCaptureId);
+    const doPost = async () => {
       const r = await api('/capture', { method: 'POST', body: form });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || 'capture failed');
       $('capTranscript').value = d.transcript || '';
       showCapResult(d);
+    };
+    try {
+      await doPost();
     } catch (err) {
-      capRecState.textContent = 'transcribe failed: ' + (err.message || err);
-      $('capSaveBtn').disabled = false;
+      if (isOffline) {
+        // Persist in IndexedDB; flushOffline replays it when Tailscale returns.
+        enqueueOffline({ id: clientCaptureId, fn: doPost });
+        const box = $('capResult'); box.style.display = ''; box.className = 'result-line warn';
+        box.textContent = 'Offline — capture queued (' + clientCaptureId.slice(0, 8) + '), will sync when online.';
+        capRecState.textContent = 'queued offline';
+        $('capSaveBtn').disabled = true;
+      } else {
+        capRecState.textContent = 'transcribe failed: ' + (err.message || err);
+        $('capSaveBtn').disabled = false;
+      }
     }
   }
   function showCapResult(d) {
@@ -949,22 +995,34 @@
   async function saveCapture() {
     const blob = capBlob || capFileBlob;
     if (!blob && !$('capTranscript').value.trim()) { toast('Record or type something first.'); return; }
+    const clientCaptureId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
     const form = new FormData();
     if (blob) form.append('audio', blob, 'capture.webm');
     form.append('transcript', $('capTranscript').value || '');
     form.append('user_id', state.session.user_id || 'scott');
     form.append('session_id', 'console');
     form.append('activity_context', $('capContext').value || '');
-    $('capSaveBtn').disabled = true;
-    try {
+    form.append('client_capture_id', clientCaptureId);
+    const doPost = async () => {
       const r = await api('/capture', { method: 'POST', body: form });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || 'capture failed');
       showCapResult(d);
+    };
+    $('capSaveBtn').disabled = true;
+    try {
+      await doPost();
     } catch (err) {
-      const box = $('capResult'); box.style.display = ''; box.className = 'result-line bad';
-      box.textContent = 'Save failed: ' + (err.message || err);
-      $('capSaveBtn').disabled = false;
+      if (isOffline) {
+        enqueueOffline({ id: clientCaptureId, fn: doPost });
+        const box = $('capResult'); box.style.display = ''; box.className = 'result-line warn';
+        box.textContent = 'Offline — capture queued (' + clientCaptureId.slice(0, 8) + '), will sync when online.';
+        $('capSaveBtn').disabled = true;
+      } else {
+        const box = $('capResult'); box.style.display = ''; box.className = 'result-line bad';
+        box.textContent = 'Save failed: ' + (err.message || err);
+        $('capSaveBtn').disabled = false;
+      }
     }
   }
 
@@ -1127,6 +1185,11 @@
   }
 
   // ---------- go ----------
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('SW register failed', e));
+    });
+  }
   boot();
 })();
 </script>

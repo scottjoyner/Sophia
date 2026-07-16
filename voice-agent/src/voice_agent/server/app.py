@@ -21,6 +21,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..auth.diarization import diarize, identify_speakers
@@ -72,6 +73,10 @@ from .session_manager import SessionManager
 from .templates_loader import load_template
 
 logger = logging.getLogger(__name__)
+
+# Module-level handle to the graph outbox so request handlers can enqueue
+# failed Neo4j writes for the reconciliation supervisor to replay.
+_graph_outbox = None
 
 
 class IntentRequest(BaseModel):
@@ -1542,6 +1547,31 @@ CAPTURE_PAGE = """<!doctype html>
 """
 
 
+def _enqueue_capture_outbox(capture_id, user_id, transcript, audio_path, content_type, duration_ms, context) -> None:
+    """Best-effort: queue a failed Neo4j capture write for the reconciliation
+    supervisor to replay when the graph is reachable again."""
+    outbox = _graph_outbox
+    if outbox is None:
+        return
+    try:
+        outbox.enqueue(
+            kind="capture",
+            idempotency_key=f"server:{capture_id}",
+            payload={
+                "user_id": user_id,
+                "capture_id": capture_id,
+                "transcript": transcript,
+                "audio_path": audio_path,
+                "content_type": content_type,
+                "duration_ms": duration_ms,
+                "metadata": {"session_id": (context or {}).get("session_id")},
+                "context": context or {},
+            },
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("failed to enqueue capture to graph outbox: %s", exc)
+
+
 def _require_owner_override(config: AppConfig, user_id: str, admin_key: str | None) -> None:
     if user_id != config.auth.owner_user_id:
         raise HTTPException(status_code=403, detail="Owner override can only enroll the configured owner user.")
@@ -1810,6 +1840,8 @@ def create_app(config: AppConfig) -> FastAPI:
     app.state.task_db = Database(Path(config.paths.artifacts_dir) / "results.sqlite")
     app.state.assistant.db = app.state.task_db
     app.state.graph_outbox = GraphOutbox(Path(config.paths.artifacts_dir) / "results.sqlite")
+    global _graph_outbox
+    _graph_outbox = app.state.graph_outbox
     app.state.registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite", config)
     app.state.supervisor = ReconciliationSupervisor(
         config,
@@ -1977,6 +2009,17 @@ def create_app(config: AppConfig) -> FastAPI:
         return HTMLResponse(
             load_template("index.html"),
             headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
+
+    @app.get("/sw.js", response_class=Response)
+    async def service_worker() -> Response:
+        # Served from root scope so the PWA can control the whole origin.
+        sw_path = Path(__file__).parent / "static" / "sw.js"
+        body = sw_path.read_text(encoding="utf-8") if sw_path.exists() else ""
+        return Response(
+            body,
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
         )
 
     @app.get("/legacy", response_class=HTMLResponse)
@@ -2312,8 +2355,9 @@ def create_app(config: AppConfig) -> FastAPI:
         location_lng: str = Form(default=""),
         location_accuracy_m: str = Form(default=""),
         activity_context: str = Form(default=""),
+        client_capture_id: str = Form(default=""),
     ) -> dict[str, Any]:
-        capture_id = uuid.uuid4().hex
+        capture_id = (client_capture_id.strip() if client_capture_id and client_capture_id.strip() else uuid.uuid4().hex)
         captures_dir = Path(config.paths.capture_dir or (Path(config.paths.artifacts_dir) / "captures"))
         captures_dir.mkdir(parents=True, exist_ok=True)
         content_type = audio.content_type if audio else "text/plain"
@@ -2372,8 +2416,10 @@ def create_app(config: AppConfig) -> FastAPI:
                 graph_saved = True
             except RuntimeError as exc:
                 graph_error = str(exc)
+                _enqueue_capture_outbox(capture_id, user_id, transcript_text, audio_path, content_type, duration_ms, context)
             except Exception as exc:
                 graph_error = f"{type(exc).__name__}: {exc}"
+                _enqueue_capture_outbox(capture_id, user_id, transcript_text, audio_path, content_type, duration_ms, context)
         payload = {
             "capture_id": capture_id,
             "session_id": session_id,
@@ -2933,6 +2979,11 @@ def create_app(config: AppConfig) -> FastAPI:
         supervisor = getattr(app.state, "supervisor", None)
         if supervisor is not None:
             supervisor.stop()
+
+    # PWA static assets: manifest, service worker, icons.
+    _static_dir = Path(__file__).parent / "static"
+    if _static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(_static_dir), html=False), name="static")
 
     return app
 
