@@ -63,6 +63,11 @@ class LLMConfig(BaseModel):
     task_timeout: float | None = None
     task_extract_timeout: float | None = None
     fleet_discovery: bool = False
+    # W-15: Sophia's own fleet/model selection duplicates auto-router/auto-assign.
+    # When False (default), Sophia delegates routing to the auto-router and does
+    # NOT probe the Tailscale fleet for lmstudio endpoints. Set True only for a
+    # transitional local-fleet mode; long-term this code is deprecated.
+    local_fleet_discovery: bool = False
     fleet_node_port: int = 1234
     fleet_router_url: str | None = None
     fleet_candidate_nodes: str | None = None
@@ -204,6 +209,8 @@ def _apply_env(config: AppConfig) -> AppConfig:
         llm_update["task_extract_timeout"] = float(os.environ["SOPHIA_TASK_EXTRACT_TIMEOUT"])
     if os.getenv("SOPHIA_FLEET_DISCOVERY"):
         llm_update["fleet_discovery"] = os.environ["SOPHIA_FLEET_DISCOVERY"].lower() in {"1", "true", "yes", "on"}
+    if os.getenv("SOPHIA_LOCAL_FLEET_DISCOVERY"):
+        llm_update["local_fleet_discovery"] = os.environ["SOPHIA_LOCAL_FLEET_DISCOVERY"].lower() in {"1", "true", "yes", "on"}
     if os.getenv("SOPHIA_FLEET_NODE_PORT"):
         llm_update["fleet_node_port"] = int(os.environ["SOPHIA_FLEET_NODE_PORT"])
     if os.getenv("SOPHIA_FLEET_ROUTER_URL"):

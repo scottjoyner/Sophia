@@ -41,7 +41,11 @@ class Assistant:
         self._last_chat_endpoint = None
         self._last_task_endpoint = None
         self.db = None
-        if getattr(config.llm, "fleet_discovery", False):
+        # W-15: Sophia's local fleet/model selection is disabled by default and
+        # delegates to auto-router/auto-assign. Only the explicit
+        # SOPHIA_LOCAL_FLEET_DISCOVERY flag (or config local_fleet_discovery)
+        # enables the legacy in-tree discoverer.
+        if getattr(config.llm, "local_fleet_discovery", False):
             self._init_fleet()
 
     def _init_fleet(self) -> None:
