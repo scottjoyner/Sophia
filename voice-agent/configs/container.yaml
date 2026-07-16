@@ -36,5 +36,7 @@ neo4j:
   user: neo4j
   password_file: /run/secrets/neo4j_password
   password:
-  database: assistx
+  # Canonical: Sophia memory graph lives in "neo4j". Control-plane (tasks,
+  # traces) is owned by AssistX in the "assistx" database. (LLD §3.1 W-08)
+  database: neo4j
   default_speaker_name:

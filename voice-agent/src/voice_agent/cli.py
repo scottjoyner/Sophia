@@ -315,7 +315,7 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_auto.add_argument("--neo4j-uri", required=True)
     ingest_auto.add_argument("--neo4j-user", required=True)
     ingest_auto.add_argument("--neo4j-pass", required=True)
-    ingest_auto.add_argument("--neo4j-database", default="memory")
+    ingest_auto.add_argument("--neo4j-database", default="neo4j")
     ingest_auto.add_argument("--user", required=True)
     ingest_auto.add_argument("--speaker-node-id")
     ingest_auto.add_argument("--speaker-name")

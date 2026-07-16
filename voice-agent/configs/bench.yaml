@@ -6,5 +6,7 @@ llm:
 stt:
   refine_enabled: true
 auth:
-  threshold: 0.1
+  # Required range 0.60–0.75 (container.yaml:32 uses 0.60). Below 0.60 the
+  # voiceprint gate is unsafe; above 0.75 it over-rejects. (LLD §3.1 W-09)
+  threshold: 0.60
   require_challenge: false

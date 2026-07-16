@@ -114,7 +114,14 @@ class Neo4jConfig(BaseModel):
     user: str = "neo4j"
     password: str | None = None
     password_file: str | None = None
-    database: str = "memory"
+    # Canonical multi-database targeting (see LLD §3.1 / W-08 and HLD §5):
+    #   - "neo4j"   → unified personal MEMORY graph (SophiaCapture, Transcript,
+    #                 MeetingSegment, Speaker, KgNode, embeddings).
+    #   - "assistx" → CONTROL plane (Task, Intent, Dispatch, EventEnvelope,
+    #                 TraceEvent, TraceGroup) owned by AssistX.
+    # The legacy "memory" database is RETIRED; Sophia captures/meetings write to
+    # "neo4j" and any control-plane writes target "assistx".
+    database: str = "neo4j"
     default_speaker_name: str | None = None
 
 

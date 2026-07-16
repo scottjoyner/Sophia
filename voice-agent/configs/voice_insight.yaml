@@ -2,8 +2,10 @@
 neo4j:
   uri: bolt://host.docker.internal:7687
   user: neo4j
-  source_database: assistx
-  target_database: memory
+  # Canonical model (LLD §3.1 W-08): "neo4j" is the memory graph; "assistx" is
+  # the control plane. The legacy "memory" database is retired.
+  source_database: neo4j
+  target_database: neo4j
 
 voice_insight:
   namespace: sophia_voice_insight_v1
