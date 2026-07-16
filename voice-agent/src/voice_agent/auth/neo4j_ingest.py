@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from ..util.embed_text import EMBEDDING_FIELD, embedding_payload
+
 logger = logging.getLogger(__name__)
 
 
@@ -131,6 +133,10 @@ def save_capture_to_neo4j(
     import json
 
     metadata = metadata or {}
+    # W-16: vector embedding for the capture (schema field EMBEDDING_FIELD).
+    # Empty when no embedder is available — the vector index backfills later.
+    capture_embedding = embedding_payload(transcript or "").get(EMBEDDING_FIELD)
+    transcript_embedding = capture_embedding
     client_capture_id = str(metadata.get("client_capture_id") or "").strip()
     capture_dedupe_key = f"client:{client_capture_id}" if client_capture_id else f"server:{capture_id}"
     transcript_id = f"{capture_dedupe_key}:transcript"
@@ -171,6 +177,7 @@ def save_capture_to_neo4j(
         capture.intent = $intent,
         capture.intent_confidence = $intent_confidence,
         capture.intent_source = $intent_source,
+        capture.embedding = $embedding,
         capture.updated_at = datetime()
     MERGE (speaker)-[:RECORDED]->(audio)
     MERGE (audio)-[:CAPTURED_AS]->(capture)
@@ -194,6 +201,7 @@ def save_capture_to_neo4j(
       SET transcript.text = $transcript,
           transcript.source = 'sophia_mobile_capture',
           transcript.capture_dedupe_key = $capture_dedupe_key,
+          transcript.embedding = $embedding,
           transcript.updated_at = datetime()
       MERGE (speaker)-[:SAID]->(transcript)
       MERGE (transcript)-[:CAPTURED_IN]->(capture)
@@ -231,6 +239,7 @@ def save_capture_to_neo4j(
                 intent=str(context.get("intent") or ""),
                 intent_confidence=context.get("intent_confidence"),
                 intent_source=str(context.get("intent_source") or ""),
+                embedding=capture_embedding,
             )
         driver.close()
     except Exception as exc:
@@ -337,6 +346,8 @@ def save_meeting_to_neo4j(
         for i, seg in enumerate(segments):
             seg_id = f"{meeting_id}_seg_{i}"
             speaker_label = seg.get("name", f"Speaker {seg.get('speaker', 0) + 1}")
+            # W-16: vector embedding for the segment transcript (empty if no embedder).
+            seg_embedding = embedding_payload(seg.get("transcript", "")).get(EMBEDDING_FIELD)
             session.run(
                 """
                 MERGE (seg:MeetingSegment {id: $seg_id})
@@ -348,6 +359,7 @@ def save_meeting_to_neo4j(
                     seg.confidence = $confidence,
                     seg.meeting_id = $meeting_id,
                     seg.segment_idx = $i,
+                    seg.embedding = $embedding,
                     seg.created_at = datetime()
                 """,
                 seg_id=seg_id,
@@ -359,9 +371,12 @@ def save_meeting_to_neo4j(
                 confidence=float(seg.get("confidence", 0)),
                 meeting_id=meeting_id,
                 i=i,
+                embedding=seg_embedding,
             )
             segment_nodes.append(seg_id)
 
+        # W-16: vector embedding for the full meeting transcript (empty if no embedder).
+        meeting_embedding = embedding_payload(transcript or "").get(EMBEDDING_FIELD)
         result = session.run(
             """
             MERGE (m:Meeting {id: $meeting_id})
@@ -369,6 +384,7 @@ def save_meeting_to_neo4j(
                 m.num_speakers = $num_speakers,
                 m.transcript = $transcript,
                 m.summary = $summary,
+                m.embedding = $embedding,
                 m.created_at = datetime()
             RETURN m
             """,
@@ -377,6 +393,7 @@ def save_meeting_to_neo4j(
             num_speakers=num_speakers,
             transcript=transcript,
             summary=summary or "",
+            embedding=meeting_embedding,
         )
         result.single()
 
