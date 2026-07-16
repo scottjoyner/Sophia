@@ -3,6 +3,11 @@ deepspeech-0.9.3-models.scorer
 training/
 voice-agent/x1-370.tailcb8954.ts.net.key
 voice-agent/x1-370.tailcb8954.ts.net.crt
+# Archived secrets (moved out of voice-agent during W-13). Never commit real
+# private keys — these are only placeholder certs kept for reference.
+archive/*.key
+archive/*.crt
+archive/*.pem
 .env
 voice-agent/.env
 __pycache__/
