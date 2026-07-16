@@ -5,6 +5,13 @@ from pathlib import Path
 import numpy as np
 
 from ..config import AppConfig
+from ..contracts_shim import (
+    ADMIN_VOICE_OVERRIDE,
+    AUTHENTICATED_SCOTT,
+    REGISTERED_USER_UNVERIFIED,
+    REJECTED,
+    UNKNOWN_SPEAKER,
+)
 from ..util.time import now_ms
 from .challenge import random_phrase
 from .registry import VoiceprintRegistry
@@ -178,6 +185,24 @@ def verify_audio_segment(
         except Exception:
             pass
 
+    # Full auth_state taxonomy (W-14). Derive from verification outcome:
+    #   - owner (scott) + accepted            -> authenticated_scott
+    #   - non-owner user_id with an enrolled   -> registered_user_unverified
+    #     profile but no confident voice match
+    #   - no voiceprint enrolled at all        -> unknown_speaker
+    #   - explicit mismatch below threshold    -> rejected
+    #   - owner_override token path            -> admin_voice_override
+    if active_accepted and user_id == config.auth.owner_user_id:
+        auth_state = AUTHENTICATED_SCOTT
+    elif active_accepted:
+        auth_state = REGISTERED_USER_UNVERIFIED
+    elif not active_candidates and not historical_candidates:
+        auth_state = UNKNOWN_SPEAKER
+    elif user_id != config.auth.owner_user_id and (active_candidates or historical_candidates):
+        auth_state = REGISTERED_USER_UNVERIFIED
+    else:
+        auth_state = REJECTED
+
     return {
         "session_id": session_id,
         "user_id": user_id,
@@ -185,6 +210,7 @@ def verify_audio_segment(
         "primary_score": best_active_score,
         "fallback_score": fallback_score if fallback_used else None,
         "accepted": active_accepted,
+        "auth_state": auth_state,
         "match_source": match_source,
         "fallback_used": fallback_used,
         "fallback_reason": fallback_reason,

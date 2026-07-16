@@ -7,6 +7,7 @@ from typing import Any
 
 from ..config import AppConfig
 from ..util.db import Database
+from ..util.time import now_ms
 from .voiceprint_graph import VoiceprintGraphStore
 
 
@@ -211,6 +212,38 @@ class VoiceprintRegistry:
             device_id=device_id,
             capture_id=capture_id,
             session_id=session_id,
+        )
+
+    def ensure_user(
+        self,
+        user_id: str,
+        *,
+        device_id: str | None = None,
+        verified: bool = False,
+        source: str = "unknown_speaker_registration",
+    ) -> dict[str, Any]:
+        """W-14: ensure a profile exists for ``user_id`` as a registered (but
+        unverified) speaker. If a profile already exists it is returned unchanged;
+        otherwise an empty placeholder is created so subsequent verification /
+        enrollment can populate the voiceprint. ``verified`` is stored as a flag
+        on the record (default False → ``registered_user_unverified``)."""
+        existing = self.get_device(user_id, device_id) if device_id else self.get(user_id)
+        if existing:
+            return existing
+        placeholder_samples: dict[str, Any] = {
+            "samples": [],
+            "verified": verified,
+            "source": source,
+            "registered_ts_ms": now_ms(),
+        }
+        # No embedding yet — empty mean; verification will replace it.
+        return self.save(
+            user_id,
+            [],
+            placeholder_samples,
+            float(getattr(self, "_default_threshold", 0.75)),
+            source=source,
+            device_id=device_id,
         )
 
     def get_devices(self, user_id: str) -> dict[str, dict[str, Any]]:

@@ -17,6 +17,50 @@ class EnrollmentError(RuntimeError):
     pass
 
 
+def register_unknown_speaker(
+    config: AppConfig,
+    *,
+    user_id: str,
+    enrollment_token: str | None = None,
+    device_id: str | None = None,
+    source: str = "unknown_speaker_registration",
+) -> dict[str, Any]:
+    """W-14: register a previously-unknown speaker as a pending, unverified profile.
+
+    The profile is created with ``auth_state`` semantics of
+    ``registered_user_unverified``: it exists in the registry but has no
+    confident voiceprint yet, so it cannot authenticate until a verification
+    sample is supplied (and optionally an enrollment token is validated). This
+    is the entry point for the unknown-speaker registration flow.
+
+    Returns a dict carrying ``auth_state = "registered_user_unverified"`` so the
+    caller can emit the correct contract envelope.
+    """
+    if not user_id or user_id == config.auth.owner_user_id:
+        raise EnrollmentError("cannot register the owner as an unknown speaker")
+    configured_token = config.auth.enrollment_token
+    if configured_token and enrollment_token != configured_token:
+        raise EnrollmentError("invalid enrollment token")
+
+    registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite", config)
+    # Create an empty, unverified profile placeholder. No voiceprint embedding
+    # yet; verification/collection will populate it later.
+    record = registry.ensure_user(
+        user_id,
+        device_id=device_id,
+        verified=False,
+        source=source,
+    )
+    return {
+        "ok": True,
+        "user_id": user_id,
+        "device_id": device_id,
+        "auth_state": "registered_user_unverified",
+        "verified": bool(record.get("verified")) if isinstance(record, dict) else False,
+        "source": source,
+    }
+
+
 def _fingerprint_file(path: str) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:

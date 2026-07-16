@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..auth.diarization import diarize, identify_speakers
-from ..auth.enroll import EnrollmentError, enroll_from_files
+from ..auth.enroll import EnrollmentError, enroll_from_files, register_unknown_speaker
 from ..auth.neo4j_ingest import (
     collect_audio_paths_from_neo4j,
     list_recent_captures,
@@ -2145,6 +2145,31 @@ def create_app(config: AppConfig) -> FastAPI:
             raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
         finally:
             _cleanup_paths(src_path, wav_path if wav_path != src_path else Path("__missing__"))
+
+    @app.post("/auth/register")
+    async def auth_register(request: Request) -> dict[str, Any]:
+        """W-14: unknown-speaker registration entry point.
+
+        Creates a pending, unverified speaker profile (auth_state =
+        registered_user_unverified). An optional enrollment token gates the
+        registration when SOPHIA_ENROLLMENT_TOKEN is configured.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        user_id = (body or {}).get("user_id") or (await request.query_params).get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id is required")
+        token = (body or {}).get("enrollment_token")
+        device_id = (body or {}).get("device_id")
+        try:
+            result = register_unknown_speaker(
+                config, user_id=user_id, enrollment_token=token, device_id=device_id
+            )
+        except EnrollmentError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return result
 
     @app.post("/api/chat/stream")
     async def chat_stream(request: Request, payload: ChatRequest):

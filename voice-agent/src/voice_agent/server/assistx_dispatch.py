@@ -11,6 +11,14 @@ from typing import Any
 
 import httpx
 
+from ..contracts_shim import (
+    AUTHENTICATED_SCOTT,
+    ADMIN_VOICE_OVERRIDE,
+    REJECTED,
+    REGISTERED_USER_UNVERIFIED,
+    UNKNOWN_SPEAKER,
+)
+
 ASSISTX_VOICE_WEBHOOK_BASE_URL = os.getenv("ASSISTX_VOICE_WEBHOOK_BASE_URL", "http://host.docker.internal:8000").rstrip("/")
 ASSISTX_VOICE_WEBHOOK_BASE_URL_CONFIGURED = "ASSISTX_VOICE_WEBHOOK_BASE_URL" in os.environ
 ASSISTX_VOICE_WEBHOOK_SECRET = (
@@ -65,17 +73,46 @@ def build_voice_event(
     if text:
         payload["text"] = text
     payload["source"] = "sophia_voice"
+    # Canonical schema version from the unified fleet contract (LLD §1).
     payload["schema_version"] = "2026-06-08.v1"
+    # correlation_id is REQUIRED on every envelope (contract enforcement).
     payload["correlation_id"] = correlation_id
     if session_id:
         payload["session_id"] = session_id
     payload["client_ts"] = now
     if meta is not None:
         payload["metadata"] = meta
+    # Full auth_state taxonomy (W-14) — mirrors the auto-assist contract enum.
+    # Callers may pass an explicit auth_state; otherwise we derive a sane
+    # default: owner scott is authenticated, an explicitly unknown speaker is
+    # unknown_speaker, and a registered-but-unverified user is
+    # registered_user_unverified. The legacy "accepted"/"not_required" booleans
+    # are no longer emitted.
+    explicit = actor.get("auth_state")
+    if explicit in {
+        AUTHENTICATED_SCOTT,
+        UNKNOWN_SPEAKER,
+        REGISTERED_USER_UNVERIFIED,
+        ADMIN_VOICE_OVERRIDE,
+        REJECTED,
+    }:
+        auth_state = explicit
+    elif (meta or {}).get("rejected"):
+        auth_state = REJECTED
+    elif (meta or {}).get("admin_override"):
+        auth_state = ADMIN_VOICE_OVERRIDE
+    elif (meta or {}).get("accepted"):
+        auth_state = AUTHENTICATED_SCOTT
+    elif actor.get("user_id") and actor["user_id"] != "scott":
+        auth_state = REGISTERED_USER_UNVERIFIED
+    elif actor.get("user_id") == "scott":
+        auth_state = AUTHENTICATED_SCOTT
+    else:
+        auth_state = UNKNOWN_SPEAKER
     payload["actor"] = {
         "user_id": actor.get("user_id", "scott"),
         "device_id": actor.get("device_id"),
-        "auth_state": actor.get("auth_state", "accepted" if (meta or {}).get("accepted") else "not_required"),
+        "auth_state": auth_state,
     }
     payload["links"] = {
         "correlation_id": correlation_id,
