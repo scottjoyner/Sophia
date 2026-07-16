@@ -1744,6 +1744,7 @@ async def _process_meeting_background(
         meeting_id = uuid.uuid4().hex
         full_transcript = "\n".join(full_transcript_parts)
         graph_saved = False
+        graph_pending = False
         graph_error = None
         if config.neo4j.password:
             meeting_tasks.update(task_id, "processing", "saving to graph", 95)
@@ -1765,6 +1766,26 @@ async def _process_meeting_background(
                 graph_saved = True
             except Exception as exc:
                 graph_error = f"{type(exc).__name__}: {exc}"
+                # W-11: survive a Neo4j outage — enqueue the completed meeting to
+                # the graph outbox so a replay worker can finish the write.
+                try:
+                    _graph_outbox.enqueue(
+                        kind="meeting",
+                        idempotency_key=f"meeting:{meeting_id}",
+                        payload={
+                            "meeting_id": meeting_id,
+                            "transcript": full_transcript,
+                            "segments": segments,
+                            "duration_s": duration_s,
+                            "num_speakers": len(set(s["speaker"] for s in segments if s["speaker"] >= 0)),
+                            "summary": summary,
+                        },
+                        error=graph_error,
+                    )
+                    graph_pending = True
+                    graph_error = f"{graph_error} (queued to graph outbox)"
+                except Exception as oe:  # pragma: no cover - defensive
+                    logger.error("failed to enqueue meeting to graph outbox: %s", oe)
 
         num_speakers = len(set(s["speaker"] for s in segments if s["speaker"] >= 0))
         result = {
@@ -1776,6 +1797,7 @@ async def _process_meeting_background(
             "transcript": full_transcript,
             "summary": summary,
             "graph_saved": graph_saved,
+            "graph_pending": graph_pending,
             "graph_error": graph_error,
         }
         meeting_tasks.update(task_id, "completed", "done", 100, result=result)

@@ -215,7 +215,7 @@ class GraphOutbox:
         )
 
 
-SUPPORTED_OUTBOX_KINDS = {"capture"}
+SUPPORTED_OUTBOX_KINDS = {"capture", "meeting"}
 
 
 def replay_graph_outbox_items(
@@ -229,8 +229,8 @@ def replay_graph_outbox_items(
 ) -> dict[str, Any]:
     """Replay due outbox items to Neo4j.
 
-    Currently supports capture writes. Additional kinds should be added only when
-    their completed memory model is Neo4j-first.
+    Supports capture writes and meeting completions. Meeting completions and
+    voiceprints survive Neo4j outages via the outbox (LLD §3.1 W-11).
     """
     due_items = outbox.list_due(limit=limit)
     if not due_items:
@@ -238,7 +238,7 @@ def replay_graph_outbox_items(
     if not neo4j_password:
         return {"ok": False, "reason": "Neo4j password not configured", "processed": 0, "succeeded": 0, "failed": 0, "errors": []}
 
-    from ..auth.neo4j_ingest import save_capture_to_neo4j
+    from ..auth.neo4j_ingest import save_capture_to_neo4j, save_meeting_to_neo4j
 
     processed = succeeded = failed = 0
     errors: list[dict[str, str]] = []
@@ -262,6 +262,20 @@ def replay_graph_outbox_items(
                     duration_ms=p.get("duration_ms"),
                     metadata=p.get("metadata") or {},
                     context=p.get("context") or {},
+                )
+            elif item.kind == "meeting":
+                p = item.payload
+                save_meeting_to_neo4j(
+                    neo4j_uri,
+                    neo4j_user,
+                    neo4j_password,
+                    meeting_id=p["meeting_id"],
+                    transcript=p.get("transcript", ""),
+                    segments=p.get("segments") or [],
+                    duration_s=p.get("duration_s") or 0.0,
+                    num_speakers=p.get("num_speakers") or 0,
+                    summary=p.get("summary"),
+                    database=neo4j_database,
                 )
             outbox.mark_succeeded(item.id)
             succeeded += 1
