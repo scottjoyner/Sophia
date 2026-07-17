@@ -398,6 +398,42 @@ class RelayBroker:
         pending.sort(key=lambda item: item.get("ts_ms") or 0, reverse=True)
         return {"ok": True, "session_id": session_id, "offers": pending[:limit]}
 
+    def webrtc_negotiation_status(self, session_id: str, offer_id: str, device_id: str, now_ms: int | None = None, *, lease_token: str | None = None, device_token: str | None = None) -> dict[str, Any]:
+        now = self._now(now_ms)
+        self._require_device_auth(device_id, device_token)
+        if not lease_token:
+            raise RelayError("Active lease token required for WebRTC negotiation status", 409)
+        self._require_active_lease(session_id, device_id, lease_token, now)
+        offer: dict[str, Any] | None = None
+        answer: dict[str, Any] | None = None
+        candidates: list[dict[str, Any]] = []
+        for event in self.store.list_events(after_id=0, session_id=session_id, limit=1000):
+            payload = event.get("payload") or {}
+            if payload.get("offer_id") != offer_id:
+                continue
+            item = {**payload, "event_id": event.get("id")}
+            event_type = event.get("type")
+            if event_type == "relay_webrtc_offer_received":
+                offer = item
+            elif event_type == "relay_webrtc_answer_received":
+                answer = item
+            elif event_type == "relay_webrtc_ice_candidate":
+                candidates.append(item)
+        if not offer:
+            raise RelayError(f"Unknown WebRTC offer: {offer_id}", 404)
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "device_id": device_id,
+            "offer_id": offer_id,
+            "transport": "webrtc",
+            "status": "answered" if answer else "answer_pending",
+            "offer": offer,
+            "answer": answer,
+            "candidates": candidates,
+            "fallback": {"type": "websocket", "endpoint": f"/relay/sessions/{session_id}/stream"},
+        }
+
     def record_audio_chunk(self, session_id: str, device_id: str, lease_token: str, seq: int, encoding: str, byte_count: int, now_ms: int | None = None, *, device_token: str | None = None) -> dict[str, Any]:
         now = self._now(now_ms)
         self._require_device_auth(device_id, device_token)

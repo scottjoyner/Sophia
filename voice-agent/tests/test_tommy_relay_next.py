@@ -150,6 +150,24 @@ def test_relay_client_dashboard_and_webrtc_signaling_plane(tmp_path: Path, monke
         assert candidate.status_code == 200
         assert candidate.json()["status"] == "candidate_recorded"
 
+        negotiation = client.post(
+            f"/relay/sessions/tommy/webrtc/offers/{body['signaling']['offer_id']}/status",
+            json={"device_id": "scope-a", "device_token": reg["device_token"], "lease_token": attached["lease_token"]},
+        )
+        assert negotiation.status_code == 200
+        negotiation_body = negotiation.json()
+        assert negotiation_body["status"] == "answered"
+        assert negotiation_body["offer"]["sdp"] == "v=0\r\n"
+        assert negotiation_body["answer"]["sdp"] == "v=0\r\na=answer\r\n"
+        assert negotiation_body["candidates"][0]["candidate"].startswith("candidate:1")
+
+        pending_after_answer = client.get(
+            "/relay/sessions/tommy/webrtc/offers/pending",
+            headers={"x-relay-admin-token": "admin-secret"},
+        )
+        assert pending_after_answer.status_code == 200
+        assert pending_after_answer.json()["offers"] == []
+
 
 
 

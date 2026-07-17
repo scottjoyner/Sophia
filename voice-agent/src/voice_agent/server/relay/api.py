@@ -28,6 +28,7 @@ from .models import (
     WebRTCAnswerRequest,
     WebRTCIceCandidateRequest,
     WebRTCOfferRequest,
+    WebRTCStatusRequest,
 )
 from .worker import RelayTurnWorker
 
@@ -311,6 +312,13 @@ refresh(); setInterval(refresh, 5000);
     async def webrtc_candidate(session_id: str, offer_id: str, req: WebRTCIceCandidateRequest) -> dict[str, Any]:
         try:
             return broker.webrtc_candidate(session_id, offer_id, req.device_id, req.candidate, req.sdp_mid, req.sdp_mline_index, lease_token=req.lease_token, device_token=req.device_token)
+        except RelayError as exc:
+            handle_error(exc)
+
+    @router.post("/sessions/{session_id}/webrtc/offers/{offer_id}/status")
+    async def webrtc_negotiation_status(session_id: str, offer_id: str, req: WebRTCStatusRequest) -> dict[str, Any]:
+        try:
+            return broker.webrtc_negotiation_status(session_id, offer_id, req.device_id, lease_token=req.lease_token, device_token=req.device_token)
         except RelayError as exc:
             handle_error(exc)
 

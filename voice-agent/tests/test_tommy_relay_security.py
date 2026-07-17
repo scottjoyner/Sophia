@@ -181,6 +181,13 @@ def test_relay_admin_boundaries_fail_closed(tmp_path: Path, monkeypatch) -> None
             json={"device_id": "scope-a", "device_token": reg["device_token"], "lease_token": attached["lease_token"], "sdp": "v=0\r\n"},
         )
         assert denied_webrtc.status_code == 200
+        offer_id = denied_webrtc.json()["signaling"]["offer_id"]
+
+        denied_negotiation_status = client.post(
+            f"/relay/sessions/tommy/webrtc/offers/{offer_id}/status",
+            json={"device_id": "scope-a"},
+        )
+        assert denied_negotiation_status.status_code == 401
 
 
 def test_websocket_requires_auth_before_event_access(tmp_path: Path) -> None:

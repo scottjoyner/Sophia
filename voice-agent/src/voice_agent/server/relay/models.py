@@ -34,6 +34,12 @@ class WebRTCIceCandidateRequest(BaseModel):
     sdp_mline_index: int | None = None
 
 
+class WebRTCStatusRequest(BaseModel):
+    device_id: str = Field(min_length=1)
+    device_token: str | None = None
+    lease_token: str | None = None
+
+
 class DeviceRegisterRequest(BaseModel):
     device_id: str = Field(min_length=1)
     device_token: str | None = None

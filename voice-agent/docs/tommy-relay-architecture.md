@@ -383,6 +383,9 @@ Records the SDP answer for an existing offer and emits a relay event so the orig
 #### `POST /relay/sessions/{session_id}/webrtc/offers/{offer_id}/candidate`
 Records ICE candidates for an existing offer and emits a relay event. Candidates require the same active lease/device-token checks as audio and transcript frames.
 
+#### `POST /relay/sessions/{session_id}/webrtc/offers/{offer_id}/status`
+Active-lease/device-token protected durable negotiation lookup. Returns the original offer, latest answer if present, recorded candidates, negotiation status (`answer_pending` or `answered`), and websocket fallback endpoint. This lets the originating telescope recover WebRTC state after reconnect without relying only on a live websocket event.
+
 #### `GET /relay/events?after_id=...&session_id=...`
 Return recent relay events for dashboards.
 
