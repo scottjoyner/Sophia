@@ -124,3 +124,63 @@ def test_relay_client_and_dashboard_pages_and_webrtc_skeleton(tmp_path: Path, mo
         assert body["transport"] == "webrtc"
         assert body["status"] == "not_configured"
         assert "ice_servers" in body
+
+
+
+
+def test_mesh_device_metadata_and_status_include_operational_fields(tmp_path: Path) -> None:
+    store = RelayStore(tmp_path / "relay.sqlite")
+    broker = RelayBroker(store, lease_ttl_ms=1000)
+    registered = broker.register_device(
+        "scope-a",
+        "Scope A",
+        "scott",
+        ["mic", "speaker", "fallback"],
+        platform="linux",
+        mesh_node="x1-370",
+        now_ms=1000,
+        fallback_priority=5,
+        audio_source="pipewire:default",
+        tailscale_ip="100.64.0.10",
+        location="office",
+    )
+    assert registered["audio_source"] == "pipewire:default"
+    assert registered["tailscale_ip"] == "100.64.0.10"
+    assert registered["location"] == "office"
+
+    attached = broker.attach("tommy", "scope-a", device_token=registered["device_token"], now_ms=1100)
+    status = broker.session_status("tommy", now_ms=1200)
+    assert status["active_device"]["mesh_node"] == "x1-370"
+    assert status["active_device"]["audio_source"] == "pipewire:default"
+    assert status["lease_ttl_ms_remaining"] == attached["lease_expires_at_ms"] - 1200
+
+
+def test_pending_transcript_outbox_survives_worker_restart(tmp_path: Path) -> None:
+    store = RelayStore(tmp_path / "relay.sqlite")
+    broker = RelayBroker(store, lease_ttl_ms=1000)
+    device = broker.register_device("scope-a", "Scope A", "scott", ["mic"], now_ms=1000)
+    attached = broker.attach("tommy", "scope-a", device_token=device["device_token"], now_ms=1000)
+    recorded = broker.record_transcript(
+        "tommy",
+        "scope-a",
+        attached["lease_token"],
+        seq=1,
+        text="hello tommy",
+        partial=False,
+        now_ms=1010,
+        device_token=device["device_token"],
+    )
+    pending = broker.pending_transcripts(limit=10)
+    assert pending["items"][0]["id"] == recorded["transcript_id"]
+    assert pending["items"][0]["text"] == "hello tommy"
+
+    broker.complete_transcript(recorded["transcript_id"], "tommy", "scope-a", error="temporary outage", now_ms=1020)
+    assert broker.pending_transcripts(limit=10)["items"] == []
+    failed = broker.failed_transcripts(limit=10)
+    assert failed["items"][0]["id"] == recorded["transcript_id"]
+    retried = broker.retry_transcript(recorded["transcript_id"], now_ms=1030)
+    assert retried["item"]["error"] is None
+    assert broker.pending_transcripts(limit=10)["items"][0]["id"] == recorded["transcript_id"]
+
+    broker.complete_transcript(recorded["transcript_id"], "tommy", "scope-a", response_text="done", now_ms=1040)
+    assert broker.pending_transcripts(limit=10)["items"] == []

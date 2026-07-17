@@ -46,6 +46,9 @@ class RelayBroker:
         device_token: str | None = None,
         fallback_priority: int = 100,
         trusted: bool = False,
+        audio_source: str = "",
+        tailscale_ip: str = "",
+        location: str = "",
     ) -> dict[str, Any]:
         now = self._now(now_ms)
         existing = self.store.get_device(device_id)
@@ -63,6 +66,10 @@ class RelayBroker:
         elif not (self._secret_matches(device_token, token_hash) or enrollment_authorized):
             raise RelayError("Existing relay device refresh requires device token or enrollment token", 401)
         trusted_value = bool((existing or {}).get("trusted", False) or (trusted and enrollment_authorized))
+        previous = existing or {}
+        audio_source = audio_source or previous.get("audio_source", "")
+        tailscale_ip = tailscale_ip or previous.get("tailscale_ip", "")
+        location = location or previous.get("location", "")
         device = self.store.upsert_device(
             {
                 "device_id": device_id,
@@ -76,6 +83,9 @@ class RelayBroker:
                 "token_hash": token_hash,
                 "fallback_priority": fallback_priority if trusted_value else max(fallback_priority, 1000),
                 "trusted": trusted_value,
+                "audio_source": audio_source,
+                "tailscale_ip": tailscale_ip,
+                "location": location,
             }
         )
         payload = {"device_id": device_id, "owner_id": owner_id, "ts_ms": now}
@@ -259,7 +269,19 @@ class RelayBroker:
             promoted = self.expire_session(session_id, now_ms=now)
             promoted["lease"] = {**(self._public_lease(lease) or {}), "expired": True}
             return promoted
-        return {"ok": True, **self._public_session(session), "lease": self._public_lease(lease) if lease else None, "fallback_candidates": [self._public_device(device) for device in self.store.candidate_fallback_devices(owner_id=session.get("owner_id", "scott"), exclude_device_id=session.get("active_device_id"), now_ms=now)]}
+        active_device = self.store.get_device(session.get("active_device_id")) if session.get("active_device_id") else None
+        lease_public = self._public_lease(lease) if lease else None
+        ttl_remaining = None
+        if lease and lease.get("revoked_at_ms") is None:
+            ttl_remaining = max(0, int(lease["lease_expires_at_ms"]) - now)
+        return {
+            "ok": True,
+            **self._public_session(session),
+            "lease": lease_public,
+            "lease_ttl_ms_remaining": ttl_remaining,
+            "active_device": self._public_device(active_device) if active_device else None,
+            "fallback_candidates": [self._public_device(device) for device in self.store.candidate_fallback_devices(owner_id=session.get("owner_id", "scott"), exclude_device_id=session.get("active_device_id"), now_ms=now)],
+        }
 
     def list_sessions(self) -> dict[str, Any]:
         return {"ok": True, "sessions": [self._public_session(session) for session in self.store.list_sessions()]}
@@ -358,9 +380,23 @@ class RelayBroker:
 
     def complete_transcript(self, transcript_id: int, session_id: str, device_id: str, response_text: str | None = None, error: str | None = None, now_ms: int | None = None) -> None:
         now = self._now(now_ms)
-        self.store.update_transcript_result(transcript_id, processed_at_ms=now, response_text=response_text, error=error)
+        self.store.update_transcript_result(transcript_id, processed_at_ms=None if error else now, response_text=response_text, error=error)
         event_type = "relay_llm_error" if error else "relay_llm_output"
         self._event(event_type, {"session_id": session_id, "device_id": device_id, "transcript_id": transcript_id, "text": response_text, "error": error, "ts_ms": now})
+
+    def pending_transcripts(self, limit: int = 100) -> dict[str, Any]:
+        return {"ok": True, "items": self.store.list_pending_transcripts(limit=limit)}
+
+    def failed_transcripts(self, limit: int = 100) -> dict[str, Any]:
+        return {"ok": True, "items": self.store.list_failed_transcripts(limit=limit)}
+
+    def retry_transcript(self, transcript_id: int, now_ms: int | None = None) -> dict[str, Any]:
+        now = self._now(now_ms)
+        item = self.store.retry_transcript(transcript_id, queued_at_ms=now)
+        if not item:
+            raise RelayError(f"Unknown transcript: {transcript_id}", 404)
+        self._event("relay_transcript_retry_queued", {"session_id": item["session_id"], "device_id": item["device_id"], "transcript_id": transcript_id, "ts_ms": now})
+        return {"ok": True, "item": item}
 
     def list_events(self, after_id: int = 0, session_id: str | None = None, limit: int = 500) -> dict[str, Any]:
         return {"ok": True, "events": self.store.list_events(after_id=after_id, session_id=session_id, limit=limit)}

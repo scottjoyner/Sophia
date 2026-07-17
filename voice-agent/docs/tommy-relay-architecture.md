@@ -210,7 +210,10 @@ Request:
   "owner_id": "scott",
   "capabilities": ["mic", "speaker", "browser_audio"],
   "platform": "linux",
-  "mesh_node": "x1-370"
+  "mesh_node": "x1-370",
+  "audio_source": "pipewire:default",
+  "tailscale_ip": "100.64.0.10",
+  "location": "office"
 }
 ```
 
@@ -346,7 +349,16 @@ Request:
 ```
 
 #### `GET /relay/dashboard`
-Minimal operations page for live device/session visibility and handoff controls.
+Operations page for live device/session visibility, active lease TTL, missing audio ranges, pending assistant outbox work, event timeline, and handoff controls.
+
+#### `GET /relay/sessions/{session_id}/gaps`
+Admin-only view of unresolved audio sequence gaps and the current `expected_seq` so dashboards/agents can request local resend from their short rolling buffer.
+
+#### `GET /relay/outbox/pending`
+Admin-only view of final transcripts that were durably queued for asynchronous assistant processing but not yet marked processed. The relay worker re-enqueues these on startup so process restarts do not drop turns.
+
+#### `GET /relay/outbox/failed` and `POST /relay/outbox/{transcript_id}/retry`
+Admin-only failed-turn inspection and manual retry path. Assistant failures are preserved with an error instead of deleting the transcript; retry clears the error, refreshes `queued_at_ms`, and requeues the turn if the worker is live.
 
 #### `GET /tommy`
 Browser telescope page that can register the current browser, attach to the durable `tommy` session, request microphone access, and use `/relay/sessions/tommy/stream` as the websocket fallback.
@@ -369,6 +381,10 @@ Return recent relay events for dashboards.
   "owner_id": "scott",
   "platform": "linux",
   "capabilities": ["mic", "speaker"],
+  "mesh_node": "x1-370",
+  "audio_source": "pipewire:default",
+  "tailscale_ip": "100.64.0.10",
+  "location": "office",
   "last_seen_ms": 1234567890,
   "status": "online"
 }
@@ -407,6 +423,34 @@ Return recent relay events for dashboards.
   "ts_ms": 1234567890
 }
 ```
+
+---
+
+## Relay agent operations
+
+Each telescope should run `tommy-relay-agent` with a local JSON config, normally at `~/.config/tommy-relay-agent/config.json`.
+
+Useful commands:
+
+```bash
+# one-time enrollment; writes relay_url/device_id/device_token/session metadata
+python -m voice_agent.relay_agent --config ~/.config/tommy-relay-agent/config.json \
+  --relay https://x1-370/ --device-id x1-browser enroll \
+  --enrollment-token "$TOMMY_RELAY_ENROLLMENT_TOKEN" \
+  --capability mic --capability speaker --mesh-node x1-370 \
+  --audio-source pipewire:default
+
+# attach/heartbeat once, persisting lease + resume token
+python -m voice_agent.relay_agent --config ~/.config/tommy-relay-agent/config.json run --once
+
+# long-running heartbeat/resume daemon
+python -m voice_agent.relay_agent --config ~/.config/tommy-relay-agent/config.json run
+
+# render user-level systemd unit
+python -m voice_agent.relay_agent --config ~/.config/tommy-relay-agent/config.json install-user-service --dry-run
+```
+
+The daemon mode keeps a lease alive, auto-attaches when no lease exists, persists `lease_token`/`resume_token`, and can be installed as a restartable user service. Tokens are saved in a `0600` JSON file and should not be logged.
 
 ---
 

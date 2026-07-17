@@ -80,6 +80,9 @@ def create_relay_router(
                 device_token=req.device_token,
                 fallback_priority=req.fallback_priority,
                 trusted=req.trusted,
+                audio_source=req.audio_source,
+                tailscale_ip=req.tailscale_ip,
+                location=req.location,
             )
         except RelayError as exc:
             handle_error(exc)
@@ -123,18 +126,23 @@ def create_relay_router(
     @router.get("/dashboard", response_class=HTMLResponse)
     async def relay_dashboard(x_relay_admin_token: str | None = Header(default=None)) -> str:
         require_admin(x_relay_admin_token)
-        return """<!doctype html><html><head><title>Relay Dashboard</title></head>
-<body><h1>Relay Dashboard</h1><p>Monitor Tommy telescope mesh devices, leases, events, and force-handoff controls.</p>
-<section id=devices></section><section id=sessions></section><button id=force-handoff>force-handoff</button>
+        return """<!doctype html><html><head><title>Relay Dashboard</title>
+<style>body{font-family:system-ui;background:#0b1020;color:#e7ecff;margin:2rem}pre{background:#151b33;padding:1rem;border-radius:8px;overflow:auto}.grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}button{padding:.5rem 1rem}</style></head>
+<body><h1>Relay Dashboard</h1><p>Monitor Tommy telescope mesh devices, active leases, heartbeats, missing audio ranges, pending assistant outbox work, events, and force-handoff controls.</p>
+<button id=force-handoff>force-handoff</button><button onclick=refresh()>refresh</button>
+<div class=grid><section><h2>Devices</h2><pre id=devices></pre></section><section><h2>Sessions / active device / lease TTL</h2><pre id=sessions></pre></section><section><h2>Tommy gaps</h2><pre id=gaps></pre></section><section><h2>Pending outbox</h2><pre id=outbox></pre></section></div><section><h2>Events</h2><pre id=events></pre></section>
 <script>
 async function refresh(){
-  const token = localStorage.tommyRelayAdminToken || prompt('Relay admin token');
-  if (token) localStorage.tommyRelayAdminToken = token;
+  const token = sessionStorage.tommyRelayAdminToken || prompt('Relay admin token');
+  if (token) sessionStorage.tommyRelayAdminToken = token;
   const headers = token ? {'x-relay-admin-token': token} : {};
-  const devices = await fetch('/relay/devices', {headers}).then(r=>r.json());
-  const sessions = await fetch('/relay/sessions', {headers}).then(r=>r.json());
+  const get = p => fetch(p, {headers}).then(r=>r.json());
+  const [devices, sessions, gaps, outbox, events] = await Promise.all([get('/relay/devices'), get('/relay/sessions'), get('/relay/sessions/tommy/gaps'), get('/relay/outbox/pending?limit=20'), get('/relay/events?session_id=tommy&limit=100')]);
   document.querySelector('#devices').textContent = JSON.stringify(devices, null, 2);
   document.querySelector('#sessions').textContent = JSON.stringify(sessions, null, 2);
+  document.querySelector('#gaps').textContent = JSON.stringify(gaps, null, 2);
+  document.querySelector('#outbox').textContent = JSON.stringify(outbox, null, 2);
+  document.querySelector('#events').textContent = JSON.stringify(events, null, 2);
 }
 refresh(); setInterval(refresh, 5000);
 </script></body></html>"""
@@ -290,10 +298,41 @@ refresh(); setInterval(refresh, 5000);
         require_admin(x_relay_admin_token)
         return broker.list_events(after_id=after_id, session_id=session_id, limit=limit)
 
+    @router.get("/outbox/pending")
+    async def pending_outbox(limit: int = 100, x_relay_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
+        require_admin(x_relay_admin_token)
+        return broker.pending_transcripts(limit=max(1, min(limit, 500)))
+
+    @router.get("/outbox/failed")
+    async def failed_outbox(limit: int = 100, x_relay_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
+        require_admin(x_relay_admin_token)
+        return broker.failed_transcripts(limit=max(1, min(limit, 500)))
+
+    @router.post("/outbox/{transcript_id}/retry")
+    async def retry_outbox(transcript_id: int, x_relay_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
+        require_admin(x_relay_admin_token)
+        try:
+            result = broker.retry_transcript(transcript_id)
+        except RelayError as exc:
+            handle_error(exc)
+            raise
+        if worker:
+            worker.enqueue(
+                {
+                    "transcript_id": result["item"]["id"],
+                    "session_id": result["item"]["session_id"],
+                    "device_id": result["item"]["device_id"],
+                    "seq": result["item"]["seq"],
+                    "text": result["item"]["text"],
+                }
+            )
+        return result
+
     @router.get("/health")
     async def health(x_relay_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
         require_admin(x_relay_admin_token)
-        return {"ok": True, "worker": worker.status() if worker else None}
+        pending = broker.pending_transcripts(limit=1)
+        return {"ok": True, "worker": worker.status() if worker else None, "pending_outbox_count_nonzero": bool(pending["items"])}
 
     @router.get("/readiness")
     async def readiness(x_relay_admin_token: str | None = Header(default=None)) -> dict[str, Any]:

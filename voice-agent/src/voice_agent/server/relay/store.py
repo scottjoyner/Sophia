@@ -37,7 +37,10 @@ class RelayStore:
                     updated_at_ms INTEGER,
                     token_hash TEXT,
                     fallback_priority INTEGER DEFAULT 100,
-                    trusted INTEGER DEFAULT 0
+                    trusted INTEGER DEFAULT 0,
+                    audio_source TEXT,
+                    tailscale_ip TEXT,
+                    location TEXT
                 )
                 """
             )
@@ -123,6 +126,9 @@ class RelayStore:
                     "token_hash": "TEXT",
                     "fallback_priority": "INTEGER DEFAULT 100",
                     "trusted": "INTEGER DEFAULT 0",
+                    "audio_source": "TEXT",
+                    "tailscale_ip": "TEXT",
+                    "location": "TEXT",
                 },
             )
             self._ensure_columns(
@@ -154,7 +160,7 @@ class RelayStore:
 
     def _ensure_columns(self, table: str, columns: dict[str, str]) -> None:
         allowed_specs = {
-            "relay_devices": {"token_hash": "TEXT", "fallback_priority": "INTEGER DEFAULT 100", "trusted": "INTEGER DEFAULT 0"},
+            "relay_devices": {"token_hash": "TEXT", "fallback_priority": "INTEGER DEFAULT 100", "trusted": "INTEGER DEFAULT 0", "audio_source": "TEXT", "tailscale_ip": "TEXT", "location": "TEXT"},
             "relay_sessions": {"resume_token_hash": "TEXT", "expected_seq": "INTEGER DEFAULT 0", "missing_ranges_json": "TEXT DEFAULT '[]'"},
             "relay_leases": {"lease_token_hash": "TEXT", "revoked_at_ms": "INTEGER", "revoked_reason": "TEXT"},
             "relay_transcripts": {"queued_at_ms": "INTEGER", "processed_at_ms": "INTEGER", "response_text": "TEXT", "error": "TEXT"},
@@ -183,8 +189,8 @@ class RelayStore:
                 INSERT INTO relay_devices (
                     device_id, name, owner_id, capabilities_json, platform, mesh_node,
                     status, last_seen_ms, created_at_ms, updated_at_ms, token_hash,
-                    fallback_priority, trusted
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    fallback_priority, trusted, audio_source, tailscale_ip, location
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(device_id) DO UPDATE SET
                     name=excluded.name,
                     owner_id=excluded.owner_id,
@@ -196,7 +202,10 @@ class RelayStore:
                     updated_at_ms=excluded.updated_at_ms,
                     token_hash=COALESCE(excluded.token_hash, relay_devices.token_hash),
                     fallback_priority=excluded.fallback_priority,
-                    trusted=excluded.trusted
+                    trusted=excluded.trusted,
+                    audio_source=excluded.audio_source,
+                    tailscale_ip=excluded.tailscale_ip,
+                    location=excluded.location
                 """,
                 (
                     record["device_id"],
@@ -212,6 +221,9 @@ class RelayStore:
                     record.get("token_hash"),
                     record.get("fallback_priority", 100),
                     1 if record.get("trusted") else 0,
+                    record.get("audio_source", ""),
+                    record.get("tailscale_ip", ""),
+                    record.get("location", ""),
                 ),
             )
             self.conn.commit()
@@ -426,13 +438,47 @@ class RelayStore:
             self.conn.commit()
             return int(cur.lastrowid)
 
-    def update_transcript_result(self, transcript_id: int, *, processed_at_ms: int, response_text: str | None = None, error: str | None = None) -> None:
+    def update_transcript_result(self, transcript_id: int, *, processed_at_ms: int | None, response_text: str | None = None, error: str | None = None) -> None:
         with self._lock:
             self.conn.execute(
                 "UPDATE relay_transcripts SET processed_at_ms=?, response_text=?, error=? WHERE id=?",
                 (processed_at_ms, response_text, error, transcript_id),
             )
             self.conn.commit()
+
+    def list_pending_transcripts(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT * FROM relay_transcripts
+                WHERE queued_at_ms IS NOT NULL AND processed_at_ms IS NULL AND error IS NULL
+                ORDER BY queued_at_ms ASC, id ASC LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [self._transcript_from_row(row) for row in rows]
+
+    def list_failed_transcripts(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT * FROM relay_transcripts
+                WHERE queued_at_ms IS NOT NULL AND processed_at_ms IS NULL AND error IS NOT NULL
+                ORDER BY queued_at_ms ASC, id ASC LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [self._transcript_from_row(row) for row in rows]
+
+    def retry_transcript(self, transcript_id: int, *, queued_at_ms: int) -> dict[str, Any] | None:
+        with self._lock:
+            self.conn.execute(
+                "UPDATE relay_transcripts SET error=NULL, processed_at_ms=NULL, queued_at_ms=? WHERE id=?",
+                (queued_at_ms, transcript_id),
+            )
+            self.conn.commit()
+            row = self.conn.execute("SELECT * FROM relay_transcripts WHERE id=?", (transcript_id,)).fetchone()
+        return self._transcript_from_row(row) if row else None
 
     def list_transcripts(self, session_id: str, *, after_seq: int | None = None, limit: int = 100) -> list[dict[str, Any]]:
         query = "SELECT * FROM relay_transcripts WHERE session_id=?"

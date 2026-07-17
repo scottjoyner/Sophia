@@ -32,6 +32,9 @@ class DeviceRegisterRequest(BaseModel):
     enrollment_token: str | None = None
     fallback_priority: int = 100
     trusted: bool = False
+    audio_source: str = ""
+    tailscale_ip: str = ""
+    location: str = ""
 
 
 class DeviceHeartbeatRequest(BaseModel):
