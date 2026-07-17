@@ -15,10 +15,12 @@ try:
     from assistx.contracts.event_envelope import (
         Actor,
         AuthState,
-        EventEnvelope as EventEnvelop,
         EventLink,
         TraceEvent,
         TraceGroup,
+    )
+    from assistx.contracts.event_envelope import (
+        EventEnvelope as EventEnvelop,
     )
     from assistx.contracts.version import SCHEMA_VERSION
 

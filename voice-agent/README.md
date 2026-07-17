@@ -182,6 +182,9 @@ For the next-stage auth + response policy objective (authenticate Scott when
 detected, otherwise still respond in Scott clone voice), see
 `docs/voice_auth_response_plan.md`.
 
+For the multi-device Tommy relay/session-broker design, see
+`docs/tommy-relay-architecture.md`.
+
 ## Protocols
 `server.protocol` in config controls websocket message parsing:
 - `native_ws`: `{type, payload}`
@@ -204,6 +207,39 @@ voice-agent mic --url ws://localhost:8765/ws --user scott --protocol hermes_over
 - `POST /voice-chat` - classify transcript and run the configured LLM path.
 - `POST /voiceprints/train-neo4j` - train a voiceprint from audio paths in Neo4j.
 - `GET /memory-graph/status` - inspect the configured Neo4j memory graph target.
+
+## Tommy relay endpoints
+- `POST /relay/devices/register` - register or refresh a telescope/device endpoint. New devices receive a one-time `device_token`; set `SOPHIA_RELAY_ENROLLMENT_TOKEN` or `TOMMY_RELAY_ENROLLMENT_TOKEN` to require enrollment proof.
+- `POST /relay/devices/heartbeat` - renew device liveness and active lease state.
+- `GET /relay/devices` - list known relay devices without token hashes.
+- `POST /relay/devices/{device_id}/trust` - admin-token-protected trust toggle.
+- `POST /relay/devices/{device_id}/rotate-token` - admin-token-protected device token rotation; the new raw token is returned once.
+- `POST /relay/devices/{device_id}/revoke` - admin-token-protected revocation; revoked devices cannot heartbeat, resume, negotiate WebRTC, or enter fallback promotion.
+- `GET /relay/sessions` - list durable relay sessions.
+- `POST /relay/sessions/{session_id}/attach` - attach only when the session is unowned/expired/parked, or when a valid resume token is supplied. Active sessions require handoff or force.
+- `POST /relay/sessions/{session_id}/resume` - reconnect with `resume_token`, replay missed events/transcripts, and receive a fresh lease.
+- `POST /relay/sessions/{session_id}/handoff` - atomically move the active lease to another device and emit revoke/takeover events.
+- `POST /relay/sessions/{session_id}/force-handoff` - elevated/manual override path for emergency takeover.
+- `POST /relay/sessions/{session_id}/detach` - release an active device lease and park the session.
+- `POST /relay/sessions/{session_id}/expire` - manually expire an active lease and promote a fallback device when available.
+- `GET /relay/sessions/{session_id}` - inspect active device, state, lease, fallback candidates, missing sequence ranges, and expected sequence.
+- `GET /relay/sessions/{session_id}/timeline` - durable event/transcript timeline for replay/debugging.
+- `GET /relay/sessions/{session_id}/gaps` - current sequence gap report.
+- `POST /relay/sessions/{session_id}/audio` - HTTP fallback for sequenced audio chunks with duplicate rejection and gap detection.
+- `POST /relay/sessions/{session_id}/transcript` - persist/emit transcript events and enqueue final text for async assistant processing.
+- `WS /relay/sessions/{session_id}/stream` - bidirectional JSON websocket for `audio_chunk`, `transcript`, `heartbeat`, `resume`, event fetch frames, and live relay event push.
+- `GET /relay/events?after_id=0&session_id=...` - durable relay event log.
+- `GET /relay/live-events` - relay events from the in-process Sophia `EventBus`.
+- `GET /relay/health` and `GET /relay/readiness` - relay DB/worker status.
+
+CLI scaffold:
+
+```bash
+tommy-relay-agent --relay http://127.0.0.1:8765 --device-id x1-370 register --capability mic --capability speaker
+tommy-relay-agent --relay http://127.0.0.1:8765 --device-id x1-370 --device-token dt_... attach
+TOMMY_RELAY_ADMIN_TOKEN=... tommy-relay-agent --device-id x1-370 rotate-token
+TOMMY_RELAY_ADMIN_TOKEN=... tommy-relay-agent --device-id x1-370 revoke --reason lost-device
+```
 
 ## Recommended model profile (5-10 GB RAM)
 - STT: `faster-whisper tiny` with `int8`, `cpu_threads=2`

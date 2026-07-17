@@ -1869,6 +1869,28 @@ def create_app(config: AppConfig) -> FastAPI:
     app.state.meeting_tasks = MeetingTaskManager(MeetingTaskStore(app.state.task_db))
     meeting_tasks = app.state.meeting_tasks
     app.state.registry = VoiceprintRegistry(Path(config.paths.artifacts_dir) / "results.sqlite", config)
+
+    from .relay.api import create_relay_router
+    from .relay.broker import RelayBroker
+    from .relay.store import RelayStore
+    from .relay.worker import RelayTurnWorker
+
+    app.state.relay_store = RelayStore(Path(config.paths.artifacts_dir) / "relay.sqlite")
+    app.state.relay_broker = RelayBroker(
+        app.state.relay_store,
+        event_hook=lambda event_type, payload: (bus.publish(event_type, payload), None)[1],
+    )
+    app.state.relay_worker = RelayTurnWorker(app.state.relay_broker, manager)
+    app.include_router(create_relay_router(app.state.relay_broker, bus, app.state.relay_worker))
+
+    @app.on_event("startup")
+    async def _start_relay_worker() -> None:
+        app.state.relay_worker.start()
+
+    @app.on_event("shutdown")
+    async def _stop_relay_worker() -> None:
+        await app.state.relay_worker.stop()
+
     app.state.supervisor = ReconciliationSupervisor(
         config,
         task_db=app.state.task_db,
@@ -2034,6 +2056,42 @@ def create_app(config: AppConfig) -> FastAPI:
     async def unified_homepage() -> HTMLResponse:
         return HTMLResponse(
             load_template("index.html"),
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
+
+    @app.get("/tommy", response_class=HTMLResponse)
+    async def tommy_relay_page() -> HTMLResponse:
+        return HTMLResponse(
+            """<!doctype html><html><head><title>Tommy Telescope Relay</title></head>
+<body><main><h1>Tommy Telescope Relay</h1>
+<p>Attach this telescope/browser as an audio device for the durable Tommy session.</p>
+<p>WebSocket stream endpoint: <code>/relay/sessions/tommy/stream</code></p>
+<label>Device ID <input id=device value="browser-telescope"></label>
+<button id=register>Register</button><button id=attach>Attach Tommy</button><button id=mic>Start mic</button>
+<pre id=log></pre>
+<script>
+const sessionId = 'tommy';
+const streamEndpoint = `/relay/sessions/${sessionId}/stream`;
+let deviceToken = localStorage.tommyRelayDeviceToken || '';
+let leaseToken = localStorage.tommyRelayLeaseToken || '';
+function log(x){ document.querySelector('#log').textContent += JSON.stringify(x, null, 2) + '\n'; }
+document.querySelector('#register').onclick = async () => {
+  const device_id = document.querySelector('#device').value;
+  const body = await fetch('/relay/devices/register', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({device_id, capabilities:['browser_audio','mic'], platform:'browser'})}).then(r=>r.json());
+  if (body.device_token) localStorage.tommyRelayDeviceToken = deviceToken = body.device_token;
+  log(body);
+};
+document.querySelector('#attach').onclick = async () => {
+  const device_id = document.querySelector('#device').value;
+  const body = await fetch('/relay/sessions/tommy/attach', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({device_id, device_token:deviceToken})}).then(r=>r.json());
+  if (body.lease_token) localStorage.tommyRelayLeaseToken = leaseToken = body.lease_token;
+  log({...body, stream: streamEndpoint});
+};
+document.querySelector('#mic').onclick = async () => {
+  await navigator.mediaDevices.getUserMedia({audio:true});
+  log({ok:true, message:'microphone opened; websocket fallback endpoint ready', streamEndpoint});
+};
+</script></main></body></html>""",
             headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
         )
 
