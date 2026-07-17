@@ -4,6 +4,8 @@
 
 This document specifies the relay/session design for **Tommy** so the same logical voice session can move across multiple devices in the telescope mesh network without losing state.
 
+For hands-on validation and operator drills, use [`tommy-relay-testing-guide.md`](tommy-relay-testing-guide.md) alongside this architecture document.
+
 ### Goals
 - Treat **Tommy** as a durable logical session, not a single machine.
 - Allow any telescope/device to attach to the session.
@@ -529,6 +531,7 @@ Implemented in the current relay package:
 - async transcript-to-assistant worker so final transcript persistence is not blocked by LLM latency/failure
 - websocket live event push for relay events, plus `heartbeat` and `resume` frames
 - fallback-device promotion on expiry when another fresh mic-capable device is available
+- WebRTC signaling plane: `/webrtc/offer`, pending-offer queue, answer recording, ICE candidate recording, configurable ICE servers, websocket fallback metadata, and protected `/webrtc/offers/{offer_id}/status` recovery for reconnecting originating telescopes
 - relay observability endpoints: `/relay/health`, `/relay/readiness`, `/relay/sessions`, `/relay/sessions/{id}/timeline`
 - `tommy-relay-agent` CLI scaffold for device registration, attach, heartbeat, transcript, and audio-file fallback
 
@@ -601,10 +604,14 @@ A release is acceptable only if it satisfies all of these:
 - simulate partial transcript delivery and verify idempotency
 
 ### Operational checks
-- `/healthz` remains green
-- `/readyz` reports relay readiness
-- `/events` shows relay state transitions
-- session restore works after process restart
+- `/healthz` and `/readyz` remain green.
+- `/relay/health` and `/relay/readiness` report relay store/worker status under admin token.
+- `/relay/events` and `/relay/sessions/{id}/timeline` show relay state transitions.
+- session restore works after process restart.
+- browser `/tommy` can register/attach, request mic permission, create WebRTC offer metadata, and stream over websocket fallback.
+- WebRTC offer/answer/candidate/status flow can be recovered by the originating telescope after reconnect.
+
+For the full release checklist and copy/paste smoke commands, see [`tommy-relay-testing-guide.md`](tommy-relay-testing-guide.md).
 
 ---
 

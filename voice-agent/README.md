@@ -183,7 +183,9 @@ detected, otherwise still respond in Scott clone voice), see
 `docs/voice_auth_response_plan.md`.
 
 For the multi-device Tommy relay/session-broker design, see
-`docs/tommy-relay-architecture.md`.
+`docs/tommy-relay-architecture.md`. For the operator smoke-test, restart,
+handoff, and browser/WebRTC verification checklist, see
+`docs/tommy-relay-testing-guide.md`.
 
 ## Protocols
 `server.protocol` in config controls websocket message parsing:
@@ -227,6 +229,11 @@ voice-agent mic --url ws://localhost:8765/ws --user scott --protocol hermes_over
 - `GET /relay/sessions/{session_id}/gaps` - current sequence gap report.
 - `POST /relay/sessions/{session_id}/audio` - HTTP fallback for sequenced audio chunks with duplicate rejection and gap detection.
 - `POST /relay/sessions/{session_id}/transcript` - persist/emit transcript events and enqueue final text for async assistant processing.
+- `POST /relay/sessions/{session_id}/webrtc/offer` - active-lease/device-token-protected durable SDP offer; returns ICE servers, answer/candidate/pending endpoints, and websocket fallback metadata. Negotiation status can be recovered through `/relay/sessions/{session_id}/webrtc/offers/{offer_id}/status`.
+- `GET /relay/sessions/{session_id}/webrtc/offers/pending` - admin-token-protected list of unanswered offers for peer/SFU/helper discovery.
+- `POST /relay/sessions/{session_id}/webrtc/offers/{offer_id}/answer` - active-lease/device-token-protected SDP answer recording.
+- `POST /relay/sessions/{session_id}/webrtc/offers/{offer_id}/candidate` - active-lease/device-token-protected ICE candidate recording.
+- `POST /relay/sessions/{session_id}/webrtc/offers/{offer_id}/status` - active-lease/device-token-protected durable negotiation recovery for the originating telescope.
 - `WS /relay/sessions/{session_id}/stream` - bidirectional JSON websocket for `audio_chunk`, `transcript`, `heartbeat`, `resume`, event fetch frames, and live relay event push.
 - `GET /relay/events?after_id=0&session_id=...` - durable relay event log.
 - `GET /relay/live-events` - relay events from the in-process Sophia `EventBus`.
