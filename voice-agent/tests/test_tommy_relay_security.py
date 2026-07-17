@@ -148,6 +148,7 @@ def test_relay_admin_boundaries_fail_closed(tmp_path: Path, monkeypatch) -> None
             ("get", "/relay/sessions/tommy"),
             ("get", "/relay/sessions/tommy/timeline"),
             ("get", "/relay/sessions/tommy/gaps"),
+            ("get", "/relay/sessions/tommy/webrtc/offers/pending"),
             ("get", "/relay/events"),
             ("get", "/relay/live-events"),
             ("get", "/relay/health"),

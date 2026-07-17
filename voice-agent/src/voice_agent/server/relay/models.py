@@ -21,6 +21,19 @@ class WebRTCOfferRequest(BaseModel):
     type: str = "offer"
 
 
+class WebRTCAnswerRequest(WebRTCOfferRequest):
+    type: str = "answer"
+
+
+class WebRTCIceCandidateRequest(BaseModel):
+    device_id: str = Field(min_length=1)
+    device_token: str | None = None
+    lease_token: str | None = None
+    candidate: str = Field(min_length=1)
+    sdp_mid: str | None = None
+    sdp_mline_index: int | None = None
+
+
 class DeviceRegisterRequest(BaseModel):
     device_id: str = Field(min_length=1)
     device_token: str | None = None

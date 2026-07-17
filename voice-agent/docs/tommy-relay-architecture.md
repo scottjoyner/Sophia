@@ -361,10 +361,27 @@ Admin-only view of final transcripts that were durably queued for asynchronous a
 Admin-only failed-turn inspection and manual retry path. Assistant failures are preserved with an error instead of deleting the transcript; retry clears the error, refreshes `queued_at_ms`, and requeues the turn if the worker is live.
 
 #### `GET /tommy`
-Browser telescope page that can register the current browser, attach to the durable `tommy` session, request microphone access, and use `/relay/sessions/tommy/stream` as the websocket fallback.
+Browser telescope page that can register the current browser, attach to the durable `tommy` session, request microphone access, create a WebRTC offer for peer/SFU negotiation, and continuously stream `MediaRecorder` audio chunks through the authenticated `/relay/sessions/tommy/stream` websocket fallback.
 
 #### `POST /relay/sessions/{session_id}/webrtc/offer`
-WebRTC negotiation placeholder. It records the offer event and returns `status: not_configured` plus websocket fallback metadata until a real SFU/peer implementation is wired.
+Creates a durable WebRTC signaling record for the active lease. The relay does **not** terminate media itself; it brokers offer/answer/ICE metadata between telescope peers and keeps the websocket audio path as the fallback.
+
+Response includes:
+- `status: signaling_ready`
+- `signaling.offer_id`
+- `signaling.answer_endpoint`
+- `signaling.candidate_endpoint`
+- `signaling.pending_endpoint`
+- `ice_servers` from `TOMMY_RELAY_ICE_SERVERS` / `SOPHIA_RELAY_ICE_SERVERS`, or a default public STUN server.
+
+#### `GET /relay/sessions/{session_id}/webrtc/offers/pending`
+Admin-only queue of unanswered offers. Used by another telescope peer, browser helper, or future SFU bridge to discover pending media negotiations.
+
+#### `POST /relay/sessions/{session_id}/webrtc/offers/{offer_id}/answer`
+Records the SDP answer for an existing offer and emits a relay event so the originating device can complete the peer connection.
+
+#### `POST /relay/sessions/{session_id}/webrtc/offers/{offer_id}/candidate`
+Records ICE candidates for an existing offer and emits a relay event. Candidates require the same active lease/device-token checks as audio and transcript frames.
 
 #### `GET /relay/events?after_id=...&session_id=...`
 Return recent relay events for dashboards.
@@ -514,9 +531,11 @@ Implemented in the current relay package:
 
 Remaining future hardening:
 
-- WebRTC media plane with Opus and jitter buffer
+- optional SFU/WHIP/WHEP bridge if direct peer-to-peer paths are not reliable enough across the tailnet
+- browser-side RTCPeerConnection helper UI around the signaling API
+- Opus/jitter-buffer tuning in the actual browser/SFU media endpoint
 - encrypted rolling audio buffer/retransmit window
-- browser/mobile relay UI around the same APIs
+- richer browser/mobile relay UI around the same APIs
 - explicit admin authorization for `/force-handoff` beyond device-token trust
 - multi-process worker/backpressure strategy if the service is scaled horizontally
 

@@ -98,7 +98,7 @@ def test_revoked_devices_cannot_resume_or_open_webrtc(tmp_path: Path) -> None:
         assert exc.status_code == 404
 
 
-def test_relay_client_and_dashboard_pages_and_webrtc_skeleton(tmp_path: Path, monkeypatch) -> None:
+def test_relay_client_dashboard_and_webrtc_signaling_plane(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("TOMMY_RELAY_ADMIN_TOKEN", "admin-secret")
     config = AppConfig(paths=PathsConfig(artifacts_dir=str(tmp_path / "runs"), workspace_dir=str(tmp_path / "workspace")))
     with TestClient(create_app(config)) as client:
@@ -106,6 +106,8 @@ def test_relay_client_and_dashboard_pages_and_webrtc_skeleton(tmp_path: Path, mo
         assert tommy.status_code == 200
         assert "Tommy Telescope Relay" in tommy.text
         assert "/relay/sessions/tommy/stream" in tommy.text
+        assert "MediaRecorder" in tommy.text
+        assert "RTCPeerConnection" in tommy.text
 
         dashboard = client.get("/relay/dashboard", headers={"x-relay-admin-token": "admin-secret"})
         assert dashboard.status_code == 200
@@ -122,8 +124,31 @@ def test_relay_client_and_dashboard_pages_and_webrtc_skeleton(tmp_path: Path, mo
         body = offer.json()
         assert body["ok"] is True
         assert body["transport"] == "webrtc"
-        assert body["status"] == "not_configured"
+        assert body["status"] == "signaling_ready"
+        assert body["signaling"]["offer_id"].startswith("wo_")
+        assert body["signaling"]["answer_endpoint"] == f"/relay/sessions/tommy/webrtc/offers/{body['signaling']['offer_id']}/answer"
         assert "ice_servers" in body
+
+        pending = client.get(
+            "/relay/sessions/tommy/webrtc/offers/pending",
+            headers={"x-relay-admin-token": "admin-secret"},
+        )
+        assert pending.status_code == 200
+        assert pending.json()["offers"][0]["offer_id"] == body["signaling"]["offer_id"]
+
+        answer = client.post(
+            f"/relay/sessions/tommy/webrtc/offers/{body['signaling']['offer_id']}/answer",
+            json={"device_id": "scope-a", "device_token": reg["device_token"], "lease_token": attached["lease_token"], "sdp": "v=0\r\na=answer\r\n", "type": "answer"},
+        )
+        assert answer.status_code == 200
+        assert answer.json()["status"] == "answered"
+
+        candidate = client.post(
+            f"/relay/sessions/tommy/webrtc/offers/{body['signaling']['offer_id']}/candidate",
+            json={"device_id": "scope-a", "device_token": reg["device_token"], "lease_token": attached["lease_token"], "candidate": "candidate:1 1 udp 1 127.0.0.1 9 typ host", "sdp_mid": "0", "sdp_mline_index": 0},
+        )
+        assert candidate.status_code == 200
+        assert candidate.json()["status"] == "candidate_recorded"
 
 
 

@@ -25,6 +25,8 @@ from .models import (
     HandoffRequest,
     ResumeRequest,
     TranscriptRequest,
+    WebRTCAnswerRequest,
+    WebRTCIceCandidateRequest,
     WebRTCOfferRequest,
 )
 from .worker import RelayTurnWorker
@@ -290,6 +292,25 @@ refresh(); setInterval(refresh, 5000);
     async def webrtc_offer(session_id: str, req: WebRTCOfferRequest) -> dict[str, Any]:
         try:
             return broker.webrtc_offer(session_id, req.device_id, req.sdp, req.type, lease_token=req.lease_token, device_token=req.device_token)
+        except RelayError as exc:
+            handle_error(exc)
+
+    @router.get("/sessions/{session_id}/webrtc/offers/pending")
+    async def pending_webrtc_offers(session_id: str, limit: int = 100, x_relay_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
+        require_admin(x_relay_admin_token)
+        return broker.pending_webrtc_offers(session_id, limit=max(1, min(limit, 500)))
+
+    @router.post("/sessions/{session_id}/webrtc/offers/{offer_id}/answer")
+    async def webrtc_answer(session_id: str, offer_id: str, req: WebRTCAnswerRequest) -> dict[str, Any]:
+        try:
+            return broker.webrtc_answer(session_id, offer_id, req.device_id, req.sdp, req.type, lease_token=req.lease_token, device_token=req.device_token)
+        except RelayError as exc:
+            handle_error(exc)
+
+    @router.post("/sessions/{session_id}/webrtc/offers/{offer_id}/candidate")
+    async def webrtc_candidate(session_id: str, offer_id: str, req: WebRTCIceCandidateRequest) -> dict[str, Any]:
+        try:
+            return broker.webrtc_candidate(session_id, offer_id, req.device_id, req.candidate, req.sdp_mid, req.sdp_mline_index, lease_token=req.lease_token, device_token=req.device_token)
         except RelayError as exc:
             handle_error(exc)
 

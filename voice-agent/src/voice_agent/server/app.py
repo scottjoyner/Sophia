@@ -2074,7 +2074,16 @@ const sessionId = 'tommy';
 const streamEndpoint = `/relay/sessions/${sessionId}/stream`;
 let deviceToken = localStorage.tommyRelayDeviceToken || '';
 let leaseToken = localStorage.tommyRelayLeaseToken || '';
+let ws = null;
+let recorder = null;
+let seq = 0;
 function log(x){ document.querySelector('#log').textContent += JSON.stringify(x, null, 2) + '\n'; }
+async function blobToBase64(blob){
+  const buf = await blob.arrayBuffer();
+  let binary = '';
+  for (const b of new Uint8Array(buf)) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
 document.querySelector('#register').onclick = async () => {
   const device_id = document.querySelector('#device').value;
   const body = await fetch('/relay/devices/register', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({device_id, capabilities:['browser_audio','mic'], platform:'browser'})}).then(r=>r.json());
@@ -2088,8 +2097,30 @@ document.querySelector('#attach').onclick = async () => {
   log({...body, stream: streamEndpoint});
 };
 document.querySelector('#mic').onclick = async () => {
-  await navigator.mediaDevices.getUserMedia({audio:true});
-  log({ok:true, message:'microphone opened; websocket fallback endpoint ready', streamEndpoint});
+  const device_id = document.querySelector('#device').value;
+  if (!deviceToken || !leaseToken) { log({ok:false, error:'register and attach first'}); return; }
+  const media = await navigator.mediaDevices.getUserMedia({audio:true});
+  if (window.RTCPeerConnection) {
+    const pc = new RTCPeerConnection();
+    media.getTracks().forEach(track => pc.addTrack(track, media));
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const rtc = await fetch('/relay/sessions/tommy/webrtc/offer', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({device_id, device_token:deviceToken, lease_token:leaseToken, sdp:offer.sdp, type:offer.type})}).then(r=>r.json());
+    log({webrtc: rtc});
+  }
+  const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${streamEndpoint}`;
+  ws = new WebSocket(wsUrl);
+  ws.onmessage = ev => log(JSON.parse(ev.data));
+  ws.onopen = () => {
+    ws.send(JSON.stringify({type:'authenticate', device_id, device_token:deviceToken, lease_token:leaseToken, session_id:sessionId, seq}));
+    recorder = new MediaRecorder(media);
+    recorder.ondataavailable = async ev => {
+      if (!ev.data.size || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({type:'audio_chunk', device_id, device_token:deviceToken, lease_token:leaseToken, seq:seq++, encoding:recorder.mimeType || 'webm/opus', payload_b64:await blobToBase64(ev.data), byte_count:ev.data.size}));
+    };
+    recorder.start(1000);
+    log({ok:true, message:'microphone streaming over authenticated websocket fallback while WebRTC signaling is available', streamEndpoint});
+  };
 };
 </script></main></body></html>""",
             headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},

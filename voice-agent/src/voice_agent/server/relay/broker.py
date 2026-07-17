@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import secrets
 from collections.abc import Callable
@@ -329,18 +330,73 @@ class RelayBroker:
         if not lease_token:
             raise RelayError("Active lease token required for WebRTC negotiation", 409)
         self._require_active_lease(session_id, device_id, lease_token, now)
-        self._event("relay_webrtc_offer_received", {"session_id": session_id, "device_id": device_id, "type": offer_type, "ts_ms": now})
+        offer_id = "wo_" + secrets.token_urlsafe(18)
+        signaling = {
+            "offer_id": offer_id,
+            "offer_endpoint": f"/relay/sessions/{session_id}/webrtc/offer",
+            "answer_endpoint": f"/relay/sessions/{session_id}/webrtc/offers/{offer_id}/answer",
+            "candidate_endpoint": f"/relay/sessions/{session_id}/webrtc/offers/{offer_id}/candidate",
+            "pending_endpoint": f"/relay/sessions/{session_id}/webrtc/offers/pending",
+        }
+        self._event(
+            "relay_webrtc_offer_received",
+            {
+                "session_id": session_id,
+                "device_id": device_id,
+                "offer_id": offer_id,
+                "type": offer_type,
+                "sdp": sdp,
+                "signaling": signaling,
+                "ts_ms": now,
+            },
+        )
         return {
             "ok": True,
             "session_id": session_id,
             "device_id": device_id,
             "transport": "webrtc",
-            "status": "not_configured",
-            "type": "answer",
+            "status": "signaling_ready",
+            "type": "answer_pending",
             "sdp": "",
-            "ice_servers": [],
+            "ice_servers": self._ice_servers(),
+            "signaling": signaling,
             "fallback": {"type": "websocket", "endpoint": f"/relay/sessions/{session_id}/stream"},
         }
+
+    def webrtc_answer(self, session_id: str, offer_id: str, device_id: str, sdp: str, answer_type: str = "answer", now_ms: int | None = None, *, lease_token: str | None = None, device_token: str | None = None) -> dict[str, Any]:
+        now = self._now(now_ms)
+        self._require_device_auth(device_id, device_token)
+        if not lease_token:
+            raise RelayError("Active lease token required for WebRTC answer", 409)
+        self._require_active_lease(session_id, device_id, lease_token, now)
+        self._require_webrtc_offer(session_id, offer_id)
+        self._event("relay_webrtc_answer_received", {"session_id": session_id, "device_id": device_id, "offer_id": offer_id, "type": answer_type, "sdp": sdp, "ts_ms": now})
+        return {"ok": True, "session_id": session_id, "device_id": device_id, "offer_id": offer_id, "transport": "webrtc", "status": "answered", "type": answer_type}
+
+    def webrtc_candidate(self, session_id: str, offer_id: str, device_id: str, candidate: str, sdp_mid: str | None = None, sdp_mline_index: int | None = None, now_ms: int | None = None, *, lease_token: str | None = None, device_token: str | None = None) -> dict[str, Any]:
+        now = self._now(now_ms)
+        self._require_device_auth(device_id, device_token)
+        if not lease_token:
+            raise RelayError("Active lease token required for WebRTC ICE candidate", 409)
+        self._require_active_lease(session_id, device_id, lease_token, now)
+        self._require_webrtc_offer(session_id, offer_id)
+        payload = {"session_id": session_id, "device_id": device_id, "offer_id": offer_id, "candidate": candidate, "sdp_mid": sdp_mid, "sdp_mline_index": sdp_mline_index, "ts_ms": now}
+        self._event("relay_webrtc_ice_candidate", payload)
+        return {"ok": True, "session_id": session_id, "device_id": device_id, "offer_id": offer_id, "transport": "webrtc", "status": "candidate_recorded"}
+
+    def pending_webrtc_offers(self, session_id: str, limit: int = 100) -> dict[str, Any]:
+        offers: dict[str, dict[str, Any]] = {}
+        answered: set[str] = set()
+        for event in self.store.list_events(after_id=0, session_id=session_id, limit=max(limit * 5, 100)):
+            payload = event.get("payload") or {}
+            offer_id = payload.get("offer_id")
+            if event.get("type") == "relay_webrtc_offer_received" and offer_id:
+                offers[offer_id] = {**payload, "event_id": event.get("id")}
+            elif event.get("type") == "relay_webrtc_answer_received" and offer_id:
+                answered.add(offer_id)
+        pending = [offer for offer_id, offer in offers.items() if offer_id not in answered]
+        pending.sort(key=lambda item: item.get("ts_ms") or 0, reverse=True)
+        return {"ok": True, "session_id": session_id, "offers": pending[:limit]}
 
     def record_audio_chunk(self, session_id: str, device_id: str, lease_token: str, seq: int, encoding: str, byte_count: int, now_ms: int | None = None, *, device_token: str | None = None) -> dict[str, Any]:
         now = self._now(now_ms)
@@ -414,6 +470,25 @@ class RelayBroker:
         session = self.store.upsert_session({**previous, "session_id": session_id, "owner_id": owner_id, "active_device_id": device_id, "state": state, "resume_token_hash": self._hash_secret(resume_token), "expected_seq": expected_seq, "updated_at_ms": now})
         self._event(event_type, {"session_id": session_id, "device_id": device_id, "lease_version": lease.get("lease_version"), "ts_ms": now})
         return {"ok": True, **self._public_session(session), **self._public_lease(lease), "lease_token": token, "resume_token": resume_token, "transport": {"type": "websocket", "endpoint": f"/relay/sessions/{session_id}/stream"}}
+
+    def _require_webrtc_offer(self, session_id: str, offer_id: str) -> dict[str, Any]:
+        for event in self.store.list_events(after_id=0, session_id=session_id, limit=1000):
+            payload = event.get("payload") or {}
+            if event.get("type") == "relay_webrtc_offer_received" and payload.get("offer_id") == offer_id:
+                return payload
+        raise RelayError(f"Unknown WebRTC offer: {offer_id}", 404)
+
+    @staticmethod
+    def _ice_servers() -> list[dict[str, Any]]:
+        configured = os.getenv("TOMMY_RELAY_ICE_SERVERS") or os.getenv("SOPHIA_RELAY_ICE_SERVERS")
+        if configured:
+            try:
+                parsed = json.loads(configured)
+                if isinstance(parsed, list):
+                    return parsed
+            except Exception:
+                pass
+        return [{"urls": ["stun:stun.l.google.com:19302"]}]
 
     def _require_device(self, device_id: str) -> dict[str, Any]:
         device = self.store.get_device(device_id)
