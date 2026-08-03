@@ -37,7 +37,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Run live hardening and voice-contract tests
+      - name: Run live hardening, voice-contract, and router tests
         working-directory: voice-agent
         run: |
           pytest \
@@ -50,7 +50,8 @@ jobs:
             tests/test_neo4j_schema.py \
             tests/test_auth_state_taxonomy.py \
             tests/test_dispatch_bridge_auto_config.py \
-            tests/test_task_outbox.py
+            tests/test_task_outbox.py \
+            tests/test_auto_router_provider.py
 
       - name: Verify patch orchestrator dry run when present
         run: |
