@@ -306,8 +306,11 @@ def dispatch_to_assistx(
 
 
 def json_dumps(payload: dict[str, Any]) -> bytes:
+    wire_payload = payload
+    if any(key in payload for key in ("schema_version", "correlation_id", "actor", "links")):
+        wire_payload = assistx_voice_event_payload(payload)
     return json.dumps(
-        payload,
+        wire_payload,
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
