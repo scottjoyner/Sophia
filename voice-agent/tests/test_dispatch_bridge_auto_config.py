@@ -28,7 +28,7 @@ def _app(monkeypatch, tmp_path: Path) -> TestClient:
     return TestClient(create_app(config))
 
 
-def test_dispatch_to_assistx_uses_env_base_and_secret(monkeypatch, tmp_path):
+def test_dispatch_to_assistx_uses_env_base_secret_and_wire_contract(monkeypatch, tmp_path):
     client = _app(monkeypatch, tmp_path)
     client.post("/auth/login", json={"passphrase": "sophia"})
     captured: dict[str, object] = {}
@@ -72,10 +72,18 @@ def test_dispatch_to_assistx_uses_env_base_and_secret(monkeypatch, tmp_path):
     sent_payload = json.loads(content.decode("utf-8"))
     assert sent_payload["event_type"] == "voice_auth"
     assert sent_payload["source"] == "sophia_voice"
-    assert sent_payload["metadata"] == {"debug": True}
+    assert sent_payload["metadata"]["debug"] is True
+    assert sent_payload["metadata"]["auth_state"] == "authenticated_scott"
+    assert sent_payload["metadata"]["user_id"] == "scott"
+    assert sent_payload["metadata"]["correlation_id"]
+    assert sent_payload["metadata"]["schema_version"] == "2026-06-08.v1"
+    assert "actor" not in sent_payload
+    assert "links" not in sent_payload
+    assert "correlation_id" not in sent_payload
+    assert "schema_version" not in sent_payload
 
 
-def test_dispatch_status_uses_env_base(monkeypatch, tmp_path):
+def test_dispatch_status_uses_safe_normalized_probe(monkeypatch, tmp_path):
     client = _app(monkeypatch, tmp_path)
     monkeypatch.setattr("voice_agent.server.assistx_dispatch.ASSISTX_VOICE_WEBHOOK_BASE_URL", "http://assistant.local:8000")
     monkeypatch.setattr("voice_agent.server.assistx_dispatch.ASSISTX_VOICE_WEBHOOK_BASE_URL_CONFIGURED", True)
@@ -83,7 +91,12 @@ def test_dispatch_status_uses_env_base(monkeypatch, tmp_path):
     def fake_post(url, content=None, headers=None, timeout=None):
         assert url == "http://assistant.local:8000/api/voice/events"
         assert headers and headers["Content-Type"] == "application/json"
-        assert json.loads(content)["event_type"] == "task_created"
+        sent = json.loads(content)
+        assert sent["event_type"] == "task_proposed"
+        assert sent["auto_dispatch"] is False
+        assert sent["metadata"]["authorization_action"] == "review_required"
+        assert sent["metadata"]["auth_state"] == "unknown_speaker"
+        assert "actor" not in sent
         return _Response(401, {"detail": "Missing voice signature header"}, text='{"detail":"Missing voice signature header"}')
 
     monkeypatch.setattr(httpx, "post", fake_post)
