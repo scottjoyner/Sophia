@@ -9,7 +9,7 @@ from typing import Any
 
 from ..config import AppConfig
 from ..llm.openai_compat_provider import LLMProviderError, OpenAICompatProvider
-from ..llm.provider_base import LLMProvider, MockProvider
+from ..llm.provider_base import LLMProvider, LLMResponse, MockProvider
 from .assistx_dispatch import build_voice_event, dispatch_to_assistx
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,10 @@ class Assistant:
         # SOPHIA_LOCAL_FLEET_DISCOVERY flag (or config local_fleet_discovery)
         # enables the legacy in-tree discoverer.
         if getattr(config.llm, "local_fleet_discovery", False):
+            logger.warning(
+                "SOPHIA_LOCAL_FLEET_DISCOVERY is deprecated; auto-router and "
+                "AssistX must own fleet placement in production"
+            )
             self._init_fleet()
 
     def _init_fleet(self) -> None:
@@ -64,9 +68,7 @@ class Assistant:
             )
             self.discoverer.start()
         except Exception as exc:  # discovery is best-effort; fall back to config provider
-            import logging
-
-            logging.getLogger(__name__).warning("fleet discovery failed to start: %s", exc)
+            logger.warning("fleet discovery failed to start: %s", exc)
             self.discoverer = None
 
     def _provider_for(self, ep) -> LLMProvider | None:
@@ -179,6 +181,82 @@ class Assistant:
             parts.append(str(context.get("note")))
         return "\n".join(parts)
 
+    def _router_request_metadata(
+        self,
+        context: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not isinstance(context, dict):
+            return {}
+        metadata: dict[str, Any] = {}
+        for key in (
+            "session_id",
+            "correlation_id",
+            "device_id",
+            "user_id",
+            "activity",
+            "timezone",
+        ):
+            value = context.get(key)
+            if value is not None and value != "":
+                metadata[key] = value
+        return metadata
+
+    def _route_label(self, provider: LLMProvider, fallback: str) -> str:
+        route = getattr(provider, "last_route_metadata", None)
+        if not isinstance(route, dict) or not route:
+            return fallback
+        selected_provider = route.get("provider")
+        selected_model = route.get("model") or route.get("requested_model")
+        selected = "/".join(
+            str(value)
+            for value in (selected_provider, selected_model)
+            if value
+        ) or fallback
+        profile = route.get("profile")
+        stage = route.get("stage")
+        tags = ":".join(str(value) for value in (profile, stage) if value)
+        metrics: list[str] = []
+        if route.get("ttft_ms") is not None:
+            metrics.append(f"ttft={route['ttft_ms']}ms")
+        if route.get("latency_ms") is not None:
+            metrics.append(f"latency={route['latency_ms']}ms")
+        label = f"router:{selected}"
+        if tags:
+            label += f" [{tags}]"
+        if metrics:
+            label += " " + " ".join(metrics)
+        return label
+
+    def _stream_provider(
+        self,
+        provider: LLMProvider,
+        messages: list[dict[str, Any]],
+        request_metadata: dict[str, Any],
+    ) -> Iterator[str]:
+        if isinstance(provider, OpenAICompatProvider):
+            yield from provider.stream_complete(
+                messages,
+                request_metadata=request_metadata,
+            )
+            return
+        yield from provider.stream_complete(messages)
+
+    def _complete_provider(
+        self,
+        provider: LLMProvider,
+        prompt: str,
+        *,
+        timeout: float,
+        request_metadata: dict[str, Any],
+    ) -> LLMResponse:
+        if isinstance(provider, OpenAICompatProvider):
+            return provider.complete(
+                prompt,
+                timeout=timeout,
+                request_metadata=request_metadata,
+            )
+        return provider.complete(prompt)
+
     def _prepare_messages(self, messages: list[dict[str, Any]], context: dict[str, Any] | None) -> list[dict[str, Any]]:
         msgs: list[dict[str, Any]] = [dict(m) for m in messages]
         ctx_str = self._format_context(context)
@@ -212,11 +290,17 @@ class Assistant:
 
     def stream_reply(self, messages: list[dict[str, Any]], context: dict[str, Any] | None = None) -> Iterator[str]:
         msgs = self._prepare_messages(messages, context)
+        request_metadata = self._router_request_metadata(context)
         eps = self._candidate_endpoints("chat")
         if not eps:
             try:
-                yield from self.provider.stream_complete(msgs)
-                self._last_chat_endpoint = "config:" + getattr(self.provider, "model", "config")
+                yield from self._stream_provider(
+                    self.provider,
+                    msgs,
+                    request_metadata,
+                )
+                fallback = "config:" + getattr(self.provider, "model", "config")
+                self._last_chat_endpoint = self._route_label(self.provider, fallback)
                 return
             except Exception as exc:
                 logger.warning("configured chat provider failed: %s", exc)
@@ -224,9 +308,9 @@ class Assistant:
         for ep in eps:
             provider = self._provider_for(ep) or self.provider
             try:
-                yield from provider.stream_complete(msgs)
+                yield from self._stream_provider(provider, msgs, request_metadata)
                 self.discoverer._mark_used(ep)
-                self._last_chat_endpoint = ep.full_id
+                self._last_chat_endpoint = self._route_label(provider, ep.full_id)
                 return
             except Exception as exc:
                 self._mark_failed(ep)
@@ -243,6 +327,7 @@ class Assistant:
         # chat-sized model if the big one is cold/unreachable, so extraction
         # always produces something instead of hanging or returning nothing.
         extract_timeout = self.config.llm.task_extract_timeout or 30
+        request_metadata = self._router_request_metadata(context)
         task_eps = self._candidate_endpoints("task") or []
         chat_eps = self._candidate_endpoints("chat") or []
         pairs = [(ep, self._provider_for(ep) or self.provider) for ep in task_eps]
@@ -251,13 +336,19 @@ class Assistant:
             pairs = [(None, self.provider)]
         for ep, provider in pairs:
             try:
-                raw = provider.complete(prompt, timeout=extract_timeout).content
+                response = self._complete_provider(
+                    provider,
+                    prompt,
+                    timeout=extract_timeout,
+                    request_metadata=request_metadata,
+                )
                 if ep is not None:
                     self.discoverer._mark_used(ep)
-                    self._last_task_endpoint = ep.full_id
+                    self._last_task_endpoint = self._route_label(provider, ep.full_id)
                 else:
-                    self._last_task_endpoint = "config:" + getattr(self.provider, "model", "config")
-                return _parse_task_list(raw)
+                    fallback = "config:" + getattr(self.provider, "model", "config")
+                    self._last_task_endpoint = self._route_label(provider, fallback)
+                return _parse_task_list(response.content)
             except Exception as exc:
                 if ep is not None:
                     self._mark_failed(ep)
@@ -273,7 +364,7 @@ class Assistant:
         actor: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
-        user_id = (actor or {}).get("user_id", "scott")
+        user_id = (actor or {}).get("user_id")
         device_id = (actor or {}).get("device_id")
         for task in tasks:
             text = task.get("title") or task.get("description") or "Untitled task"
