@@ -4,9 +4,11 @@ import hashlib
 import hmac
 import json
 from pathlib import Path
+from typing import Any
 
 import httpx
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict
 
 from voice_agent.config import AppConfig, PathsConfig
 from voice_agent.server.app import create_app
@@ -20,6 +22,21 @@ class _Response:
 
     def json(self) -> dict:
         return self._body
+
+
+class _AssistXVoiceEventIn(BaseModel):
+    """Mirror the current auto-assist wire model for byte-level HMAC coverage."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    event_id: str
+    event_type: str
+    text: str | None = None
+    source: str = "sophia_voice"
+    session_id: str | None = None
+    client_ts: str | None = None
+    metadata: dict[str, Any] | None = None
+    auto_dispatch: bool = True
 
 
 def _app(monkeypatch, tmp_path: Path) -> TestClient:
@@ -68,6 +85,11 @@ def test_dispatch_to_assistx_uses_env_base_secret_and_wire_contract(monkeypatch,
 
     expected = hmac.new(b"env-secret-123", content, hashlib.sha256).hexdigest()
     assert headers["X-Voice-Signature"] == f"sha256={expected}"
+
+    # This reproduces the current auto-assist parse-and-reserialize HMAC path.
+    # The bytes must be identical or valid Sophia callbacks will be rejected.
+    parsed_by_assistx = _AssistXVoiceEventIn.model_validate_json(content)
+    assert parsed_by_assistx.model_dump_json(exclude_none=True).encode("utf-8") == content
 
     sent_payload = json.loads(content.decode("utf-8"))
     assert sent_payload["event_type"] == "voice_auth"
