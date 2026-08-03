@@ -44,7 +44,7 @@ def test_task_outbox_round_trip(db: Database) -> None:
     assert db.task_summary()["failed"] == 0
 
 
-def test_ingest_tasks_persists_to_outbox(db: Database, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ingest_tasks_persists_trusted_task_to_outbox(db: Database, monkeypatch: pytest.MonkeyPatch) -> None:
     # No AssistX secret configured -> dispatch returns sent=False but still records.
     monkeypatch.delenv("ASSISTX_VOICE_WEBHOOK_SECRET", raising=False)
     assistant = Assistant.__new__(Assistant)
@@ -64,6 +64,32 @@ def test_ingest_tasks_persists_to_outbox(db: Database, monkeypatch: pytest.Monke
     row = db.list_tasks(status="failed")[0]
     assert row["task_title"] == "Email Alice"
     assert row["payload_json"]["event_id"] == results[0]["event_id"]
+    assert row["payload_json"]["event_type"] == "task_created"
+    assert row["payload_json"]["auto_dispatch"] is True
+    assert row["payload_json"]["actor"]["auth_state"] == "authenticated_scott"
+
+
+def test_ingest_tasks_downgrades_unverified_actor_to_review_event(
+    db: Database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ASSISTX_VOICE_WEBHOOK_SECRET", raising=False)
+    assistant = Assistant.__new__(Assistant)
+    assistant.config = None  # type: ignore[assignment]
+    assistant.db = db
+
+    assistant.ingest_tasks(
+        [{"title": "Restart the service", "description": "Restart production", "priority": "high"}],
+        session_id="s-unverified",
+        actor={"user_id": "guest", "device_id": "kiosk"},
+    )
+
+    row = db.list_tasks(status="failed")[0]
+    payload = row["payload_json"]
+    assert payload["event_type"] == "task_proposed"
+    assert payload["auto_dispatch"] is False
+    assert payload["actor"]["auth_state"] == "registered_user_unverified"
+    assert payload["metadata"]["authorization_action"] == "review_required"
 
 
 def test_reconcile_tasks_reports_drift_and_requeues(db: Database) -> None:
