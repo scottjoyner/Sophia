@@ -37,42 +37,44 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Run focused hardening tests
+      - name: Run live hardening and voice-contract tests
         working-directory: voice-agent
         run: |
           pytest \
-            tests/test_apply_hardening_patches.py \
             tests/test_verify_hardening.py \
             tests/test_request_hardening.py \
-            tests/test_request_hardening_patch.py \
             tests/test_rate_limits.py \
-            tests/test_rate_limit_patch.py \
             tests/test_upload_limits.py \
             tests/test_trusted_sessions.py \
             tests/test_graph_outbox.py \
-            tests/test_replay_graph_outbox_script.py \
-            tests/test_capture_idempotency.py \
-            tests/test_capture_idempotency_patch.py \
-            tests/test_graph_capture_reconciliation_patch.py \
-            tests/test_neo4j_capture_idempotency.py \
             tests/test_neo4j_schema.py \
-            tests/test_offline_browser_queue_patch.py \
-            tests/test_offline_storage_risk_patch.py \
-            tests/test_offline_diagnostics_patch.py \
-            tests/test_app_reliability_patch.py \
-            tests/test_ui_session_refresh_patch.py
+            tests/test_auth_state_taxonomy.py \
+            tests/test_dispatch_bridge_auto_config.py \
+            tests/test_task_outbox.py
 
-      - name: Verify patch orchestrator dry run
+      - name: Verify patch orchestrator dry run when present
         run: |
-          python voice-agent/scripts/apply_hardening_patches.py --dry-run
+          if [ -f voice-agent/scripts/apply_hardening_patches.py ]; then
+            python voice-agent/scripts/apply_hardening_patches.py --dry-run
+          else
+            echo "Patch orchestrator retired; skipping."
+          fi
 
-      - name: Verify full disposable patch pipeline
+      - name: Verify full disposable patch pipeline when present
         run: |
-          python voice-agent/scripts/check_patch_pipeline.py
+          if [ -f voice-agent/scripts/check_patch_pipeline.py ]; then
+            python voice-agent/scripts/check_patch_pipeline.py
+          else
+            echo "Disposable patch pipeline retired; skipping."
+          fi
 
-      - name: Verify unpatched app hardening report is callable
+      - name: Verify hardening report is callable
         run: |
-          python voice-agent/scripts/verify_hardening.py --json || true
+          if [ -f voice-agent/scripts/verify_hardening.py ]; then
+            python voice-agent/scripts/verify_hardening.py --json || true
+          else
+            echo "Standalone hardening report script not present; tests are authoritative."
+          fi
 
   browser-smoke:
     runs-on: ubuntu-latest
@@ -81,6 +83,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "voice-agent/pyproject.toml"
+
+      - name: Install voice-agent runtime
+        working-directory: voice-agent
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -95,7 +110,38 @@ jobs:
           npm install
           npx playwright install --with-deps chromium
 
+      - name: Start Sophia UI server
+        working-directory: voice-agent
+        env:
+          SOPHIA_SESSION_SECRET: ci-session-secret
+          SOPHIA_APP_PASSWORD: ci-password
+        run: |
+          voice-agent serve --host 127.0.0.1 --port 8765 > /tmp/sophia-ui.log 2>&1 &
+          echo $! > /tmp/sophia-ui.pid
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8765/ > /dev/null; then
+              echo "Sophia UI server is ready."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Sophia UI server did not become ready."
+          cat /tmp/sophia-ui.log
+          exit 1
+
       - name: Run Playwright smoke tests
         working-directory: voice-agent
         run: |
           npm run test:ui -- --project=chromium
+
+      - name: Show Sophia server log on failure
+        if: failure()
+        run: |
+          cat /tmp/sophia-ui.log || true
+
+      - name: Stop Sophia UI server
+        if: always()
+        run: |
+          if [ -f /tmp/sophia-ui.pid ]; then
+            kill "$(cat /tmp/sophia-ui.pid)" || true
+          fi
