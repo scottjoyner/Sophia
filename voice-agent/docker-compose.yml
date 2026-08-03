@@ -1,6 +1,6 @@
 x-sophia-env: &sophia-env
-  # When Hermes exposes an OpenAI-compatible endpoint, switch config llm.provider to hermes
-  # and point base_url at the reachable host from this container.
+  # Sophia talks only to the strict-offline auto-router gateway. It does not
+  # discover or call fleet nodes directly.
   SOPHIA_VOICE_URL: http://127.0.0.1:8765
   ASSISTX_VOICE_WEBHOOK_BASE_URL: ${ASSISTX_VOICE_WEBHOOK_BASE_URL:-http://host.docker.internal:8000}
   ASSISTX_VOICE_WEBHOOK_SECRET: ${ASSISTX_VOICE_WEBHOOK_SECRET:-}
@@ -9,27 +9,17 @@ x-sophia-env: &sophia-env
   NEO4J_USER: ${NEO4J_USER:-neo4j}
   NEO4J_PASSWORD: ${NEO4J_PASSWORD:-}
   NEO4J_PASSWORD_FILE: ${NEO4J_PASSWORD_FILE:-/run/secrets/neo4j_password}
-  NEO4J_DATABASE: ${NEO4J_DATABASE:-assistx}
+  NEO4J_DATABASE: ${NEO4J_DATABASE:-neo4j}
   NEO4J_DEFAULT_SPEAKER: ${NEO4J_DEFAULT_SPEAKER:-}
   SOPHIA_CAPTURE_DIR: ${SOPHIA_CAPTURE_DIR:-/captures}
-  SOPHIA_INTENT_PROVIDER: ${SOPHIA_INTENT_PROVIDER:-mock}
-  SOPHIA_INTENT_BASE_URL: ${SOPHIA_INTENT_BASE_URL:-}
-  SOPHIA_INTENT_API_KEY: ${SOPHIA_INTENT_API_KEY:-}
-  SOPHIA_INTENT_MODEL: ${SOPHIA_INTENT_MODEL:-draft-model}
-  SOPHIA_LLM_PROVIDER: ${SOPHIA_LLM_PROVIDER:-}
-  SOPHIA_LLM_BASE_URL: ${SOPHIA_LLM_BASE_URL:-}
-  SOPHIA_LLM_MODEL: ${SOPHIA_LLM_MODEL:-}
-  SOPHIA_TASK_MODEL: ${SOPHIA_TASK_MODEL:-}
-  SOPHIA_LLM_TIMEOUT: ${SOPHIA_LLM_TIMEOUT:-}
-  SOPHIA_TASK_TIMEOUT: ${SOPHIA_TASK_TIMEOUT:-}
-  SOPHIA_TASK_EXTRACT_TIMEOUT: ${SOPHIA_TASK_EXTRACT_TIMEOUT:-60}
-  SOPHIA_FLEET_DISCOVERY: ${SOPHIA_FLEET_DISCOVERY:-}
-  SOPHIA_FLEET_NODE_PORT: ${SOPHIA_FLEET_NODE_PORT:-}
-  SOPHIA_FLEET_ROUTER_URL: ${SOPHIA_FLEET_ROUTER_URL:-}
-  SOPHIA_FLEET_CANDIDATE_NODES: ${SOPHIA_FLEET_CANDIDATE_NODES:-}
-  SOPHIA_FLEET_REFRESH_INTERVAL: ${SOPHIA_FLEET_REFRESH_INTERVAL:-}
-  SOPHIA_FLEET_CHAT_MAX_PARAMS: ${SOPHIA_FLEET_CHAT_MAX_PARAMS:-}
-  SOPHIA_FLEET_TASK_MIN_PARAMS: ${SOPHIA_FLEET_TASK_MIN_PARAMS:-}
+  SOPHIA_INTENT_PROVIDER: ${SOPHIA_INTENT_PROVIDER:-openai}
+  SOPHIA_INTENT_BASE_URL: ${SOPHIA_INTENT_BASE_URL:-http://host.docker.internal:8088/v1}
+  SOPHIA_INTENT_API_KEY: ${SOPHIA_INTENT_API_KEY:-local-offline-only}
+  SOPHIA_INTENT_MODEL: ${SOPHIA_INTENT_MODEL:-auto/fast}
+  SOPHIA_TASK_MODEL: ${SOPHIA_TASK_MODEL:-auto/high-quality}
+  SOPHIA_LLM_TIMEOUT: ${SOPHIA_LLM_TIMEOUT:-60}
+  SOPHIA_TASK_TIMEOUT: ${SOPHIA_TASK_TIMEOUT:-60}
+  SOPHIA_TASK_EXTRACT_TIMEOUT: ${SOPHIA_TASK_EXTRACT_TIMEOUT:-30}
   SOPHIA_OWNER_OVERRIDE_ENABLED: ${SOPHIA_OWNER_OVERRIDE_ENABLED:-true}
   SOPHIA_OWNER_OVERRIDE_TOKEN: ${SOPHIA_OWNER_OVERRIDE_TOKEN:-}
   ASSISTX_BASIC_AUTH_USER: ${ASSISTX_BASIC_AUTH_USER:-admin}
@@ -56,12 +46,6 @@ services:
     environment: *sophia-env
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Resolve Tailscale MagicDNS (100.100.100.100) so the voice-agent can reach
-    # lmstudio endpoints at <node>:1234 directly, while keeping the docker
-    # embedded DNS first so host.docker.internal (Neo4j/AssistX) still resolves.
-    dns:
-      - "127.0.0.11"
-      - "100.100.100.100"
     volumes:
       - ./src:/app/src
       - sophia_voice_data:/data

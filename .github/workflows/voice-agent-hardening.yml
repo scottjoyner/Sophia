@@ -51,7 +51,8 @@ jobs:
             tests/test_auth_state_taxonomy.py \
             tests/test_dispatch_bridge_auto_config.py \
             tests/test_task_outbox.py \
-            tests/test_auto_router_provider.py
+            tests/test_auto_router_provider.py \
+            tests/test_no_local_fleet_authority.py
 
       - name: Verify patch orchestrator dry run when present
         run: |

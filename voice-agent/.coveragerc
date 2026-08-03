@@ -5,7 +5,6 @@ omit =
     */tests/*
     */tts/*
     */stt/*
-    */llm/model_discovery.py
     */llm/openai_compat_provider.py
     cli.py
     bench/*
