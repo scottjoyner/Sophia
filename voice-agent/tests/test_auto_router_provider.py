@@ -10,6 +10,7 @@ from voice_agent.llm.openai_compat_provider import (
     normalize_openai_base_url,
     validate_auto_router_base_url,
 )
+from voice_agent.server.assistant import Assistant
 
 
 @pytest.mark.parametrize(
@@ -246,3 +247,50 @@ def test_router_503_is_structured_and_never_implies_hosted_fallback(monkeypatch)
     assert "not sent to a hosted provider" in str(exc)
     assert provider.last_route_metadata["status_code"] == 503
     assert provider.last_route_metadata["retry_after_seconds"] == 12
+
+
+def test_assistant_route_label_surfaces_selected_runtime_and_latency() -> None:
+    assistant = object.__new__(Assistant)
+    provider = object()
+    provider.last_route_metadata = {
+        "provider": "xwing-lmstudio",
+        "model": "qwen-local",
+        "profile": "fast",
+        "stage": "draft",
+        "ttft_ms": 81,
+        "latency_ms": 640,
+    }
+
+    label = assistant._route_label(provider, "config:auto/fast")
+
+    assert label == (
+        "router:xwing-lmstudio/qwen-local [fast:draft] "
+        "ttft=81ms latency=640ms"
+    )
+
+
+def test_ingested_task_without_actor_is_review_only_not_scott(monkeypatch) -> None:
+    captured: dict = {}
+
+    def fake_dispatch(payload):
+        captured["payload"] = payload
+        return {"sent": False, "error": "review only"}
+
+    monkeypatch.setattr(
+        "voice_agent.server.assistant.dispatch_to_assistx",
+        fake_dispatch,
+    )
+    assistant = object.__new__(Assistant)
+    assistant.db = None
+
+    assistant.ingest_tasks(
+        [{"title": "Review the deployment", "description": ""}],
+        actor=None,
+    )
+
+    payload = captured["payload"]
+    assert payload["actor"]["user_id"] == "unknown"
+    assert payload["actor"]["auth_state"] == "unknown_speaker"
+    assert payload["event_type"] == "task_proposed"
+    assert payload["auto_dispatch"] is False
+    assert payload["metadata"].get("user_id") is None
