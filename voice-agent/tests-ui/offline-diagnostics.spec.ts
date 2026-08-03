@@ -1,26 +1,48 @@
 import { test, expect } from '@playwright/test';
 
-test('offline diagnostics panel renders mocked server status', async ({ page }) => {
-  await page.route('**/healthz', async route => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-  await page.route('**/diagnostics/offline', async route => {
+test('unified Sophia console exposes the AssistX bridge after login', async ({ page }) => {
+  await page.route('**/status', async route => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         ok: true,
-        graph_outbox: { pending_total: 0, due: 0, counts: {} },
-        capture_idempotency: { counts: { active: 1, expired: 0 }, healthy: true },
-        roles: { neo4j: 'durable Sophia memory brain' },
+        llm: { assistant_configured: true, assistant_model: 'auto/fast' },
+      }),
+    });
+  });
+  await page.route('**/memory-graph/status', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ password_configured: true }),
+    });
+  });
+  await page.route('**/dispatch/status', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        assistx_reachable: true,
+        assistx_webhook_ok: true,
+        assistx_url: 'http://auto-assist:8000',
       }),
     });
   });
 
   await page.goto('/');
-  await expect(page.locator('#offlineDiagnosticsPanel')).toBeVisible();
-  await expect(page.locator('#offlineDiagnosticsRefreshBtn')).toBeVisible();
-  await page.locator('#offlineDiagnosticsRefreshBtn').click();
-  await expect(page.locator('#offlineDiagnosticsStatus')).toContainText('Reliability path healthy');
-  await expect(page.locator('#offlineDiagnosticsJson')).toContainText('durable Sophia memory brain');
+  await expect(page.locator('#loginForm')).toBeVisible();
+  await page.locator('#pass').fill('ci-password');
+  await page.locator('#loginBtn').click();
+
+  await expect(page.locator('#app')).toBeVisible();
+  await expect(page.locator('#modelPill')).toContainText('auto/fast');
+  await expect(page.locator('#assistxPill')).toContainText('connected');
+
+  await page.locator('.nav-item[data-tab="dispatch"]').first().click();
+  await expect(page.locator('.panel[data-panel="dispatch"]')).toBeVisible();
+  await expect(page.locator('#dispatchSendBtn')).toBeVisible();
+  await expect(page.locator('#autoDispatchToggle')).toBeVisible();
+  await expect(page.locator('#executionTrace')).toContainText('No dispatch yet');
+  await expect(page.locator('#taskList')).toContainText('Tasks extracted');
 });
