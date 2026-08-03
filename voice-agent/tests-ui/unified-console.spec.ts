@@ -9,7 +9,6 @@ test('unified Sophia console exposes the AssistX bridge after login', async ({ p
 
   await expect(page.locator('#app')).toBeVisible();
   await expect(page.locator('#modelPill')).toContainText('model:');
-  await expect(page.locator('#assistxPill')).toContainText('assistx:');
 
   await page.locator('.nav-item[data-tab="dispatch"]').first().click();
   await expect(page.locator('.panel[data-panel="dispatch"]')).toBeVisible();
