@@ -251,7 +251,11 @@ def test_router_503_is_structured_and_never_implies_hosted_fallback(monkeypatch)
 
 def test_assistant_route_label_surfaces_selected_runtime_and_latency() -> None:
     assistant = object.__new__(Assistant)
-    provider = object()
+    provider = OpenAICompatProvider(
+        "http://auto-router:8088",
+        None,
+        "auto/fast",
+    )
     provider.last_route_metadata = {
         "provider": "xwing-lmstudio",
         "model": "qwen-local",
