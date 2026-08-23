@@ -46,6 +46,8 @@ x-sophia-volumes: &sophia-volumes
 
 services:
   sophia-voice:
+    mem_limit: 2g
+    memswap_limit: 3g
     build:
       context: .
       args:
