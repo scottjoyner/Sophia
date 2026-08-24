@@ -1,0 +1,31 @@
+# Sophia Voice Agent — Caddy reverse proxy with automatic HTTPS via Tailscale
+# When Tailscale's MagicDNS + HTTPS is available, Caddy auto-provisions certs.
+# Otherwise, use a self-signed cert or let Tailscale handle TLS at the tailnet level.
+#
+# Start: docker compose up sophia-caddy -d
+# Access: https://x1-370.tailcb8954.ts.net:8443/
+
+{$SOPHIA_EXTERNAL_HOST:x1-370.tailcb8954.ts.net}:8443 {
+    tls {
+        protocols tls1.2 tls1.3
+    }
+
+    encode gzip zstd
+
+    log {
+        output stdout
+        level INFO
+    }
+
+    # Rate-limiting headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+    }
+
+    reverse_proxy {$SOPHIA_UPSTREAM:sophia-voice:8765} {
+        header_up X-Forwarded-Proto "https"
+        header_up X-Real-IP {remote_host}
+    }
+}
