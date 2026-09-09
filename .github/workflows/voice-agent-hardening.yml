@@ -24,6 +24,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate Caddy configuration
+        run: |
+          docker run --rm \
+            -v "$PWD/voice-agent/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine \
+            caddy validate --config /etc/caddy/Caddyfile
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
