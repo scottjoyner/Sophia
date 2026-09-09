@@ -103,10 +103,20 @@ x1-370.tailcb8954.ts.net:8443 {
         reverse_proxy billing-service:3016
     }
     
-    # Auto-assist API (port 8000) — on auto-assist_default network  
+    # Legacy Auto-assist API path (port 8000) on auto-assist_default.
+    #
+    # This route is NOT the Kipnerter Tailnet-SSO authority. AssistX may trust
+    # Tailscale-User-Login only when traffic arrives through Tailscale Serve.
+    # Strip every Tailscale identity header Caddy could otherwise forward from
+    # an arbitrary :8443 client so this legacy path can only fall back to the
+    # normal AssistX auth mechanisms (for example Basic auth).
     @assistx path /assistx/*
     handle @assistx {
-        reverse_proxy assistx-api:8000
+        reverse_proxy assistx-api:8000 {
+            header_up -Tailscale-User-Login
+            header_up -Tailscale-User-Name
+            header_up -Tailscale-User-Profile-Pic
+        }
     }
 
     # Nextcloud — access via /nextcloud/* prefix since subdomain routing complex in Caddy v2
