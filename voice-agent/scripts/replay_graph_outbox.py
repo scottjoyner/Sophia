@@ -23,7 +23,11 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from voice_agent.config import load_config  # noqa: E402
-from voice_agent.server.graph_outbox import GraphOutbox, replay_graph_outbox_items  # noqa: E402
+from voice_agent.server.graph_outbox import (  # noqa: E402
+    OUTBOX_DB_NAME,
+    GraphOutbox,
+    replay_graph_outbox_items,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", help="Optional Sophia YAML config path.")
     parser.add_argument(
         "--artifacts-dir",
-        help="Override artifacts directory containing graph_outbox.sqlite. Defaults to config.paths.artifacts_dir.",
+        help="Override artifacts directory containing results.sqlite. Defaults to config.paths.artifacts_dir.",
     )
     parser.add_argument("--limit", type=int, default=25, help="Maximum due outbox items to replay. Default: 25.")
     parser.add_argument("--json", action="store_true", help="Emit compact JSON only.")
@@ -42,7 +46,19 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config(args.config)
     artifacts_dir = Path(args.artifacts_dir or config.paths.artifacts_dir)
-    outbox = GraphOutbox(artifacts_dir / "graph_outbox.sqlite")
+    # Must match the server's wiring in app.py, which builds the outbox over the
+    # shared artifacts database (results.sqlite) rather than a dedicated file.
+    # Pointing at any other name silently replays an empty database and leaves
+    # the real backlog untouched.
+    db_path = artifacts_dir / OUTBOX_DB_NAME
+    if not db_path.exists():
+        print(
+            f"graph outbox not found at {db_path}; nothing to replay "
+            "(the server writes the outbox into the artifacts database)",
+            file=sys.stderr,
+        )
+        return 1
+    outbox = GraphOutbox(db_path)
 
     before = outbox.counts()
     result = replay_graph_outbox_items(
