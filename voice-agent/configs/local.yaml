@@ -1,6 +1,6 @@
 # Local development config for this host.
 # Neo4j is running locally (user: neo4j). Set the password via env:
-#   export NEO4J_PASSWORD=knowledge_graph_2026
+#   export NEO4J_PASSWORD=${NEO4J_PASSWORD}
 # then run:  voice-agent serve --config configs/local.yaml
 server:
   host: 0.0.0.0

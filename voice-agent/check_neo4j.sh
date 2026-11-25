@@ -15,8 +15,8 @@ echo ""
 echo "Expected (from user request):"
 echo "  NEO4J_URI: bolt://localhost:7687"
 echo "  NEO4J_USER: neo4j"
-echo "  NEO4J_PASSWORD: knowledge_graph_2026"
-echo "  NEO4J_DATABASE: knowledge_graph_2026"
+echo "  NEO4J_PASSWORD: ${NEO4J_PASSWORD}"
+echo "  NEO4J_DATABASE: ${NEO4J_PASSWORD}"
 echo ""
 echo ".env file contents:"
 grep -E "^NEO4J_" "$ENV_FILE"
@@ -31,8 +31,8 @@ actual_password=$(grep "^NEO4J_PASSWORD=" "$ENV_FILE" | cut -d'=' -f2)
 actual_database=$(grep "^NEO4J_DATABASE=" "$ENV_FILE" | cut -d'=' -f2)
 expected_uri="bolt://localhost:7687"
 expected_user="neo4j"
-expected_password="knowledge_graph_2026"
-expected_database="knowledge_graph_2026"
+expected_password="${NEO4J_PASSWORD}"
+expected_database="${NEO4J_PASSWORD}"
 
 pass_count=0
 fail_count=0
